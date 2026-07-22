@@ -150,6 +150,18 @@ fn quickstart_row(key: &str, glyph: &str, summary: &str) -> String {
 }
 
 #[cfg(feature = "agent-runtime")]
+fn quickstart_menu_row(label: &str, terminal_columns: u16) -> String {
+    const SELECTOR_MARGIN: usize = 4;
+
+    let width = usize::from(terminal_columns).saturating_sub(SELECTOR_MARGIN);
+    if width == 0 || console::measure_text_width(label) <= width {
+        return label.to_string();
+    }
+
+    console::truncate_str(label, width, "…").into_owned()
+}
+
+#[cfg(feature = "agent-runtime")]
 fn quickstart_step_label(step: zeroclaw_runtime::quickstart::QuickstartStep) -> String {
     t(step.label_key(), step.label())
 }
@@ -1502,6 +1514,7 @@ async fn run_quickstart_cli(
         };
 
         let risk_summary = preset_summary(&form.risk);
+        let terminal_columns = console::Term::stderr().size().1;
         let mut labels: Vec<String> = vec![
             quickstart_row(
                 "cli-quickstart-row-model-provider",
@@ -1543,6 +1556,10 @@ async fn run_quickstart_cli(
                 "── Create agent (locked — fill every selector first)",
             )
         });
+        let labels: Vec<String> = labels
+            .iter()
+            .map(|label| quickstart_menu_row(label, terminal_columns))
+            .collect();
 
         let actions = [
             Action::Provider,
@@ -8074,6 +8091,25 @@ mod tests {
     use super::*;
     use clap::{CommandFactory, Parser};
     use std::net::TcpListener;
+
+    #[cfg(feature = "agent-runtime")]
+    #[test]
+    fn quickstart_menu_row_keeps_selector_rows_within_terminal_width() {
+        let row = "[✓] Model provider — existing.openrouter.default using a very long configured model name";
+
+        let truncated = quickstart_menu_row(row, 40);
+
+        assert!(console::measure_text_width(&truncated) <= 36);
+        assert!(truncated.ends_with('…'));
+    }
+
+    #[cfg(feature = "agent-runtime")]
+    #[test]
+    fn quickstart_menu_row_leaves_short_rows_unchanged() {
+        let row = "[ ] Memory — not yet chosen";
+
+        assert_eq!(quickstart_menu_row(row, 80), row);
+    }
 
     #[test]
     fn probe_config_dir_extracts_global_flag_in_all_forms() {
