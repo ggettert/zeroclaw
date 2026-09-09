@@ -3996,6 +3996,43 @@ fn confirmed_canonical_prefix(sent_prefix: &str, delivered_response: &str) -> us
     0
 }
 
+/// Remap a MultiMessage confirmed-delivery offset onto a rewritten frame.
+///
+/// `confirmed_prefix` is the exact frame prefix (in the coordinates of the
+/// frame it was captured from) whose paragraphs the transport already
+/// delivered; `frame` is the newest visible frame recomputed from the raw
+/// accumulation. When a later sanitizer pass — e.g. a streaming redaction
+/// span that only completes on a later delta — rewrites bytes inside the
+/// confirmed region, the stored byte offset no longer addresses the same
+/// content in `frame`, and slicing `frame` at it would corrupt everything
+/// sent afterwards (including the terminal stop-reason text).
+///
+/// The remapped offset is the longest byte-identical common prefix of the two
+/// strings, floored to the end of a paragraph delimiter (`\n\n`). Confirmed
+/// prefixes only ever grow in whole `\n\n`-terminated paragraphs, so every
+/// paragraph fully inside the common prefix was delivered verbatim and stays
+/// confirmed, while the first rewritten paragraph is re-emitted in its
+/// sanitized form instead of being sliced mid-way. A frame that still starts
+/// with the confirmed prefix (the overwhelmingly common case) keeps its
+/// offset unchanged. The result always lies on a UTF-8 char boundary of
+/// `frame`: it is either `confirmed_prefix.len()` (a byte-verified prefix of
+/// `frame`) or ends immediately after an ASCII `\n\n`.
+pub(crate) fn remap_confirmed_offset(confirmed_prefix: &str, frame: &str) -> usize {
+    if frame.as_bytes().starts_with(confirmed_prefix.as_bytes()) {
+        return confirmed_prefix.len();
+    }
+    let common = confirmed_prefix
+        .as_bytes()
+        .iter()
+        .zip(frame.as_bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    frame.as_bytes()[..common]
+        .windows(2)
+        .rposition(|w| w == b"\n\n")
+        .map_or(0, |i| i + 2)
+}
+
 /// Pump draft deltas to the channel transport, sanitizing every partial on the
 /// way out.
 ///

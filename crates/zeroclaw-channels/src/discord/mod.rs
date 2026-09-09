@@ -108,8 +108,12 @@ pub struct DiscordChannel {
     multi_message_delay_ms: u64,
     /// Per-channel rate-limit tracking for draft edits.
     last_draft_edit: Mutex<HashMap<String, std::time::Instant>>,
-    /// Tracks how much text has been sent in MultiMessage mode.
-    multi_message_sent_len: Mutex<HashMap<String, usize>>,
+    /// Exact confirmed-delivered frame prefix per recipient in MultiMessage
+    /// mode. The confirmed byte offset is derived as `prefix.len()`; keeping
+    /// the bytes themselves (not just a count) lets `update_draft` detect and
+    /// remap the offset when a later sanitizer pass rewrites the frame before
+    /// it (see [`crate::orchestrator::remap_confirmed_offset`]).
+    multi_message_confirmed_prefix: Mutex<HashMap<String, String>>,
     /// Thread context captured from `send_draft()` for MultiMessage paragraph delivery.
     multi_message_thread_ts: Mutex<HashMap<String, Option<String>>>,
     /// Stall-watchdog timeout in seconds (0 = disabled).
@@ -182,7 +186,7 @@ impl DiscordChannel {
             draft_update_interval_ms: 1000,
             multi_message_delay_ms: 800,
             last_draft_edit: Mutex::new(HashMap::new()),
-            multi_message_sent_len: Mutex::new(HashMap::new()),
+            multi_message_confirmed_prefix: Mutex::new(HashMap::new()),
             multi_message_thread_ts: Mutex::new(HashMap::new()),
             stall_timeout_secs: 0,
             pending_approvals: Arc::new(AsyncMutex::new(HashMap::new())),
@@ -3430,11 +3434,10 @@ impl Channel for DiscordChannel {
         if self.stream_mode != zeroclaw_config::schema::StreamMode::MultiMessage {
             return 0;
         }
-        self.multi_message_sent_len
+        self.multi_message_confirmed_prefix
             .lock()
             .get(recipient)
-            .copied()
-            .unwrap_or(0)
+            .map_or(0, String::len)
     }
 
     async fn send_draft(&self, message: &SendMessage) -> anyhow::Result<Option<String>> {
@@ -3472,7 +3475,7 @@ impl Channel for DiscordChannel {
             StreamMode::MultiMessage => {
                 // No initial draft — paragraphs are sent as new messages.
                 // Store thread context for paragraph delivery.
-                self.multi_message_sent_len.lock().clear();
+                self.multi_message_confirmed_prefix.lock().clear();
                 self.multi_message_thread_ts
                     .lock()
                     .insert(message.recipient.clone(), message.thread_ts.clone());
@@ -3555,29 +3558,37 @@ impl Channel for DiscordChannel {
             StreamMode::MultiMessage => {
                 // Track accumulated text and send new paragraphs at \n\n boundaries.
                 // Extract paragraph (if any) under the lock, then drop it before async work.
-                let (paragraph, consumed, thread_ts) = {
+                let (paragraph, sent_so_far, consumed, thread_ts) = {
                     let thread_ts = self
                         .multi_message_thread_ts
                         .lock()
                         .get(recipient)
                         .cloned()
                         .flatten();
-                    let mut sent_map = self.multi_message_sent_len.lock();
-                    let sent_so_far = sent_map.get(recipient).copied().unwrap_or(0);
-
-                    // DraftEvent::Clear resets accumulated text — reset our counter.
-                    if text.len() < sent_so_far {
-                        sent_map.insert(recipient.to_string(), 0);
-                        return Ok(());
-                    }
+                    let mut sent_map = self.multi_message_confirmed_prefix.lock();
+                    let confirmed = sent_map.get(recipient).map_or("", String::as_str);
+                    let sent_so_far = if text.as_bytes().starts_with(confirmed.as_bytes()) {
+                        confirmed.len()
+                    } else {
+                        // The frame no longer starts with the confirmed bytes:
+                        // either a later sanitizer pass (e.g. a redaction span
+                        // completing on this delta) rewrote text before the
+                        // confirmed offset, or a DraftEvent::Clear restarted
+                        // the accumulation. Remap the offset onto the new
+                        // frame before slicing anything with it; a restart
+                        // remaps to 0.
+                        let remapped = crate::orchestrator::remap_confirmed_offset(confirmed, text);
+                        sent_map.insert(recipient.to_string(), text[..remapped].to_string());
+                        remapped
+                    };
                     if text.len() == sent_so_far {
                         return Ok(());
                     }
 
-                    // Defensive: the counter was derived from earlier frames;
-                    // if the accumulated text was rewritten around it, degrade
-                    // to a floored boundary instead of panicking mid-character.
-                    let new_text = &text[text.floor_char_boundary(sent_so_far)..];
+                    // `sent_so_far` is a byte-verified prefix of `text` (or a
+                    // remap result on a `\n\n` boundary), so this slice cannot
+                    // split a UTF-8 character.
+                    let new_text = &text[sent_so_far..];
                     let mut scan_pos = 0;
                     let mut in_fence = false;
                     let bytes = new_text.as_bytes();
@@ -3612,7 +3623,7 @@ impl Channel for DiscordChannel {
                         scan_pos += 1;
                     }
                     // Lock is dropped here at end of block.
-                    (found_paragraph, consumed, thread_ts)
+                    (found_paragraph, sent_so_far, consumed, thread_ts)
                 };
 
                 if let Some(paragraph) = paragraph {
@@ -3620,11 +3631,10 @@ impl Channel for DiscordChannel {
                     self.send(&msg).await?;
                     // Advance only after the transport confirms delivery. A
                     // failed paragraph remains in the buffer for finalization.
-                    *self
-                        .multi_message_sent_len
-                        .lock()
-                        .entry(recipient.to_string())
-                        .or_insert(0) += consumed;
+                    self.multi_message_confirmed_prefix.lock().insert(
+                        recipient.to_string(),
+                        text[..sent_so_far + consumed].to_string(),
+                    );
                     if self.multi_message_delay_ms > 0 {
                         tokio::time::sleep(std::time::Duration::from_millis(
                             self.multi_message_delay_ms,
@@ -3639,11 +3649,10 @@ impl Channel for DiscordChannel {
                     // coordinate immediately. Without this the scanner would
                     // rediscover the same empty paragraph on every frame and
                     // never reach the text behind it.
-                    *self
-                        .multi_message_sent_len
-                        .lock()
-                        .entry(recipient.to_string())
-                        .or_insert(0) += consumed;
+                    self.multi_message_confirmed_prefix.lock().insert(
+                        recipient.to_string(),
+                        text[..sent_so_far + consumed].to_string(),
+                    );
                     // Recurse to handle remaining text.
                     return self.update_draft(recipient, message_id, text).await;
                 }
@@ -3667,18 +3676,21 @@ impl Channel for DiscordChannel {
                 .lock()
                 .remove(recipient)
                 .flatten();
-            let sent_so_far = self
-                .multi_message_sent_len
+            let confirmed = self
+                .multi_message_confirmed_prefix
                 .lock()
                 .remove(recipient)
-                .unwrap_or(0);
+                .unwrap_or_default();
+            // The reconciled final text is built to preserve the confirmed
+            // prefix byte-for-byte; remap defensively so a divergent frame
+            // degrades to re-sending whole paragraphs, never a corrupt slice.
+            let sent_so_far = if text.as_bytes().starts_with(confirmed.as_bytes()) {
+                confirmed.len()
+            } else {
+                crate::orchestrator::remap_confirmed_offset(&confirmed, text)
+            };
             if text.len() > sent_so_far {
-                // Floor defensively: the reconciled final text is built to
-                // preserve the confirmed prefix byte-for-byte, but a stale
-                // offset must degrade to re-sending a suffix, not panic.
-                let remaining = text[text.floor_char_boundary(sent_so_far)..]
-                    .trim()
-                    .to_string();
+                let remaining = text[sent_so_far..].trim().to_string();
                 if !remaining.is_empty() {
                     let msg = SendMessage::new(&remaining, recipient).in_thread(thread_ts);
                     self.send(&msg).await?;
@@ -3825,7 +3837,7 @@ impl Channel for DiscordChannel {
 
     async fn cancel_draft(&self, recipient: &str, message_id: &str) -> anyhow::Result<()> {
         if self.stream_mode == zeroclaw_config::schema::StreamMode::MultiMessage {
-            self.multi_message_sent_len.lock().remove(recipient);
+            self.multi_message_confirmed_prefix.lock().remove(recipient);
             self.multi_message_thread_ts.lock().remove(recipient);
             return Ok(());
         }
