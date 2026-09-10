@@ -3994,8 +3994,15 @@ fn cumulative_multi_message_final_text(
 /// narration. Requiring both boundaries prevents a canonical paragraph such
 /// as `base` from matching inside a confirmed `database` paragraph.
 fn confirmed_canonical_prefix(sent_prefix: &str, delivered_response: &str) -> usize {
-    for (delimiter, _) in delivered_response.rmatch_indices("\n\n") {
-        let end = delimiter + "\n\n".len();
+    let bytes = delivered_response.as_bytes();
+    for delimiter in (0..bytes.len().saturating_sub(1)).rev() {
+        if bytes[delimiter..delimiter + 2] != *b"\n\n" {
+            continue;
+        }
+        // `end` follows an ASCII newline, so it is always a UTF-8 boundary.
+        // Scanning every byte offset (rather than using non-overlapping string
+        // matches) also considers both delimiters in runs such as `\n\n\n`.
+        let end = delimiter + 2;
         if end > sent_prefix.len() || !sent_prefix.ends_with(&delivered_response[..end]) {
             continue;
         }
@@ -36116,6 +36123,81 @@ Done."#;
     #[tokio::test]
     async fn multi_message_word_suffix_is_not_confirmed_matrix() {
         assert_multi_message_word_suffix_is_not_confirmed("matrix").await;
+    }
+
+    /// Overlapping paragraph delimiters must all be reconciliation candidates.
+    /// With three newlines, the longest candidate has three trailing newlines
+    /// and does not match the confirmed prefix, while the overlapping candidate
+    /// one byte earlier is the exact already-delivered `answer\n\n` paragraph.
+    async fn assert_multi_message_overlapping_delimiter_is_confirmed(channel_name: &'static str) {
+        use zeroclaw_runtime::agent::loop_::StreamDelta;
+
+        let confirmed_prefix = "narration\n\nanswer\n\n";
+        let delivered_response = "answer\n\n\nstop";
+        let channel_impl = Arc::new(DraftRecordingChannel::multi_message_cumulative(
+            channel_name,
+        ));
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        tx.send(StreamDelta::Text(format!("{confirmed_prefix}held tail")))
+            .await
+            .unwrap();
+        drop(tx);
+
+        let streamed = Arc::new(Mutex::new(String::new()));
+        run_draft_updater(
+            channel,
+            "chat-1".to_string(),
+            "draft-1".to_string(),
+            no_tools(),
+            Arc::clone(&streamed),
+            rx,
+        )
+        .await;
+
+        let sent_so_far = channel_impl
+            .multi_message_confirmed_offset("chat-1", "draft-1")
+            .await;
+        assert_eq!(sent_so_far, confirmed_prefix.len());
+        let final_text = cumulative_multi_message_final_text(
+            &streamed.lock().unwrap_or_else(|e| e.into_inner()),
+            delivered_response,
+            sent_so_far,
+        );
+        assert_eq!(final_text, "narration\n\nanswer\n\n\nstop");
+
+        channel_impl
+            .finalize_draft("chat-1", "draft-1", &final_text, false)
+            .await
+            .unwrap();
+        let emitted = channel_impl.emitted_paragraphs.lock().await;
+        assert_eq!(
+            emitted.as_slice(),
+            [
+                "narration".to_string(),
+                "answer".to_string(),
+                "stop".to_string(),
+            ],
+            "{channel_name}: the confirmed answer paragraph must not be replayed"
+        );
+        assert_eq!(
+            emitted
+                .iter()
+                .filter(|message| message.as_str() == "answer")
+                .count(),
+            1,
+            "{channel_name}: the answer paragraph must be delivered exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_message_overlapping_delimiter_is_confirmed_discord() {
+        assert_multi_message_overlapping_delimiter_is_confirmed("discord").await;
+    }
+
+    #[tokio::test]
+    async fn multi_message_overlapping_delimiter_is_confirmed_matrix() {
+        assert_multi_message_overlapping_delimiter_is_confirmed("matrix").await;
     }
 
     #[tokio::test]
