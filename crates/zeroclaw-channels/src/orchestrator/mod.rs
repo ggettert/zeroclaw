@@ -3968,30 +3968,41 @@ fn cumulative_multi_message_final_text(
         // paragraph.
         return sent_prefix.to_string();
     }
+    if delivered_response
+        .as_bytes()
+        .starts_with(sent_prefix.as_bytes())
+    {
+        // A stale offset may have been floored to a UTF-8 boundary inside the
+        // canonical leading paragraph. Preserve an exact byte-zero prefix;
+        // unlike suffix reconciliation, this cannot match inside a word.
+        return delivered_response.to_string();
+    }
     // Align the canonical response past the confirmed paragraphs it still
-    // contains. Confirmed prefixes always end at a paragraph delimiter, so
-    // this alignment can only land on canonical paragraph boundaries — a
-    // coincidental mid-word overlap cannot garble the flush.
+    // contains. `confirmed_canonical_prefix` verifies both ends of the match
+    // are paragraph boundaries so a coincidental mid-word overlap cannot
+    // garble the flush.
     let already_delivered = confirmed_canonical_prefix(sent_prefix, delivered_response);
     format!("{sent_prefix}{}", &delivered_response[already_delivered..])
 }
 
-/// Largest byte length `k` (on a UTF-8 boundary) such that the confirmed
-/// transport prefix ends with `delivered_response[..k]` — i.e. the leading
-/// canonical bytes that have provably been delivered already and must not be
-/// flushed again. Canonical paragraphs the final sanitizer preserved still
-/// match here when it dropped earlier narration paragraphs that the stream
-/// also delivered, which is what keeps a narration-stripped final response
-/// from re-sending the paragraphs after the narration.
+/// Largest byte length `k` such that `delivered_response[..k]` is one or more
+/// complete paragraphs and the confirmed transport prefix ends with those
+/// same paragraphs at a paragraph boundary. Canonical paragraphs the final
+/// sanitizer preserved still match here when it dropped earlier narration
+/// paragraphs that the stream also delivered, which is what keeps a
+/// narration-stripped final response from re-sending the paragraphs after the
+/// narration. Requiring both boundaries prevents a canonical paragraph such
+/// as `base` from matching inside a confirmed `database` paragraph.
 fn confirmed_canonical_prefix(sent_prefix: &str, delivered_response: &str) -> usize {
-    let mut end = delivered_response.len().min(sent_prefix.len());
-    while end > 0 {
-        if delivered_response.is_char_boundary(end)
-            && sent_prefix.ends_with(&delivered_response[..end])
-        {
+    for (delimiter, _) in delivered_response.rmatch_indices("\n\n") {
+        let end = delimiter + "\n\n".len();
+        if end > sent_prefix.len() || !sent_prefix.ends_with(&delivered_response[..end]) {
+            continue;
+        }
+        let start = sent_prefix.len() - end;
+        if start == 0 || sent_prefix[..start].ends_with("\n\n") {
             return end;
         }
-        end -= 1;
     }
     0
 }
@@ -4017,6 +4028,7 @@ fn confirmed_canonical_prefix(sent_prefix: &str, delivered_response: &str) -> us
 /// offset unchanged. The result always lies on a UTF-8 char boundary of
 /// `frame`: it is either `confirmed_prefix.len()` (a byte-verified prefix of
 /// `frame`) or ends immediately after an ASCII `\n\n`.
+#[cfg(any(test, feature = "channel-discord", feature = "channel-matrix"))]
 pub(crate) fn remap_confirmed_offset(confirmed_prefix: &str, frame: &str) -> usize {
     if frame.as_bytes().starts_with(confirmed_prefix.as_bytes()) {
         return confirmed_prefix.len();
@@ -36020,6 +36032,90 @@ Done."#;
     #[tokio::test]
     async fn multi_message_redaction_spanning_deltas_remaps_confirmed_offset_matrix() {
         assert_multi_message_cross_delta_redaction_remaps_confirmed_offset("matrix").await;
+    }
+
+    /// A suffix shared only inside a word is not evidence that any canonical
+    /// paragraph was delivered. Exercise the cumulative updater/finalizer
+    /// boundary used by both real adapters: `base` must remain pending even
+    /// though the confirmed `database` paragraph ends with the same bytes.
+    async fn assert_multi_message_word_suffix_is_not_confirmed(channel_name: &'static str) {
+        use zeroclaw_runtime::agent::loop_::StreamDelta;
+
+        let confirmed_prefix = "I looked at database\n\n";
+        let leading_paragraph = "base";
+        let stop_reason = "Stopped after reaching the tool-call limit.";
+        let delivered_response = format!("{leading_paragraph}\n\n{stop_reason}");
+        let channel_impl = Arc::new(DraftRecordingChannel::multi_message_cumulative(
+            channel_name,
+        ));
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        tx.send(StreamDelta::Text(format!("{confirmed_prefix}held tail")))
+            .await
+            .unwrap();
+        drop(tx);
+
+        let streamed = Arc::new(Mutex::new(String::new()));
+        run_draft_updater(
+            channel,
+            "chat-1".to_string(),
+            "draft-1".to_string(),
+            no_tools(),
+            Arc::clone(&streamed),
+            rx,
+        )
+        .await;
+
+        let sent_so_far = channel_impl
+            .multi_message_confirmed_offset("chat-1", "draft-1")
+            .await;
+        assert_eq!(sent_so_far, confirmed_prefix.len());
+        let final_text = cumulative_multi_message_final_text(
+            &streamed.lock().unwrap_or_else(|e| e.into_inner()),
+            &delivered_response,
+            sent_so_far,
+        );
+        assert_eq!(
+            &final_text[sent_so_far..],
+            delivered_response,
+            "{channel_name}: a word-internal suffix must not count as a delivered paragraph"
+        );
+
+        channel_impl
+            .finalize_draft("chat-1", "draft-1", &final_text, false)
+            .await
+            .unwrap();
+        let emitted = channel_impl.emitted_paragraphs.lock().await;
+        assert_eq!(
+            emitted.as_slice(),
+            [
+                confirmed_prefix.trim().to_string(),
+                delivered_response.clone(),
+            ],
+            "{channel_name}: the complete canonical response must be emitted exactly once"
+        );
+        assert_eq!(
+            emitted
+                .iter()
+                .filter(|message| message.as_str() == delivered_response)
+                .count(),
+            1,
+            "{channel_name}: the canonical response must not be dropped or replayed"
+        );
+        assert!(
+            emitted[1].starts_with(leading_paragraph),
+            "{channel_name}: the real leading canonical paragraph must remain intact"
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_message_word_suffix_is_not_confirmed_discord() {
+        assert_multi_message_word_suffix_is_not_confirmed("discord").await;
+    }
+
+    #[tokio::test]
+    async fn multi_message_word_suffix_is_not_confirmed_matrix() {
+        assert_multi_message_word_suffix_is_not_confirmed("matrix").await;
     }
 
     #[tokio::test]
