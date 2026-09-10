@@ -17467,14 +17467,16 @@ api_key = "anthropic-key"
         /// called itself. Progress text lands in `progress_messages`.
         draft_updates: tokio::sync::Mutex<Vec<String>>,
         /// When set, `update_draft`/`finalize_draft` faithfully model the real
-        /// Discord/Matrix MultiMessage cumulative byte-offset bookkeeping: each
-        /// `\n\n`-bounded paragraph is emitted as its own message and the final
-        /// flush sends `text[sent_so_far..]`. This lets a test exercise the exact
+        /// Discord/Matrix MultiMessage confirmed-prefix bookkeeping: each
+        /// `\n\n`-bounded paragraph is emitted as its own message, a frame that
+        /// no longer starts with the confirmed bytes is remapped through
+        /// [`remap_confirmed_offset`], and the final flush sends
+        /// `text[sent_so_far..]`. This lets a test exercise the exact
         /// coordinate arithmetic under test rather than a simplified stand-in.
         cumulative_offset: bool,
-        /// Byte offset into the cumulative visible stream already emitted as
-        /// paragraphs, mirroring the adapters' `multi_message_sent_len`.
-        multi_sent_len: std::sync::Mutex<usize>,
+        /// Exact confirmed frame prefix already emitted as paragraphs,
+        /// mirroring the adapters' `multi_message_confirmed_prefix`.
+        multi_confirmed_prefix: std::sync::Mutex<String>,
         /// Paragraphs actually emitted to the room/channel, in order, including
         /// the final flush — the messages a user would really receive.
         emitted_paragraphs: tokio::sync::Mutex<Vec<String>>,
@@ -17508,7 +17510,7 @@ api_key = "anthropic-key"
                 stall_stop_typing: false,
                 draft_updates: tokio::sync::Mutex::new(Vec::new()),
                 cumulative_offset: false,
-                multi_sent_len: std::sync::Mutex::new(0),
+                multi_confirmed_prefix: std::sync::Mutex::new(String::new()),
                 emitted_paragraphs: tokio::sync::Mutex::new(Vec::new()),
             }
         }
@@ -17881,10 +17883,10 @@ api_key = "anthropic-key"
             _recipient: &str,
             _message_id: &str,
         ) -> usize {
-            *self
-                .multi_sent_len
+            self.multi_confirmed_prefix
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
+                .len()
         }
 
         async fn update_draft(
@@ -17897,23 +17899,27 @@ api_key = "anthropic-key"
             if self.cumulative_offset && self.supports_multi_message_streaming {
                 // Mirror the Discord/Matrix MultiMessage `update_draft`: emit
                 // every complete `\n\n`-bounded paragraph (fence-aware) from the
-                // cumulative visible text and advance the sent-length counter
+                // cumulative visible text and advance the confirmed prefix
                 // exactly as the real adapters do.
                 let mut emitted = self.emitted_paragraphs.lock().await;
-                let mut sent = self
-                    .multi_sent_len
+                let mut confirmed = self
+                    .multi_confirmed_prefix
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                if text.len() < *sent {
-                    // A Clear reset the accumulated text; reset our counter.
-                    *sent = 0;
-                    return Ok(());
+                if !text.as_bytes().starts_with(confirmed.as_bytes()) {
+                    // The frame was rewritten before the confirmed offset (a
+                    // sanitizer rewrite or a Clear restart); remap onto the new
+                    // frame exactly as the real adapters do instead of slicing
+                    // at a stale coordinate.
+                    let remapped = remap_confirmed_offset(&confirmed, text);
+                    *confirmed = text[..remapped].to_string();
                 }
                 loop {
-                    if text.len() <= *sent {
+                    let sent = confirmed.len();
+                    if text.len() <= sent {
                         break;
                     }
-                    let new_text = &text[*sent..];
+                    let new_text = &text[sent..];
                     let bytes = new_text.as_bytes();
                     let mut scan_pos = 0;
                     let mut in_fence = false;
@@ -17934,7 +17940,7 @@ api_key = "anthropic-key"
                             && bytes[scan_pos + 1] == b'\n'
                         {
                             let paragraph = new_text[..scan_pos].trim().to_string();
-                            *sent += scan_pos + 2;
+                            *confirmed = text[..sent + scan_pos + 2].to_string();
                             if !paragraph.is_empty() {
                                 emitted.push(paragraph);
                             }
@@ -17991,15 +17997,21 @@ api_key = "anthropic-key"
                 .await
                 .push(format!("{recipient}:{message_id}:{text}"));
             if self.cumulative_offset && self.supports_multi_message_streaming {
-                // Mirror the Discord/Matrix MultiMessage `finalize_draft`: flush
-                // `text[sent_so_far..]` (boundary-floored) as the final message
-                // when non-empty.
-                let sent = *self
-                    .multi_sent_len
+                // Mirror the Discord/Matrix MultiMessage `finalize_draft`:
+                // flush `text[sent_so_far..]` as the final message when
+                // non-empty, remapping a divergent frame first.
+                let confirmed = self
+                    .multi_confirmed_prefix
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                let sent = if text.as_bytes().starts_with(confirmed.as_bytes()) {
+                    confirmed.len()
+                } else {
+                    remap_confirmed_offset(&confirmed, text)
+                };
                 if text.len() > sent {
-                    let remaining = text[text.floor_char_boundary(sent)..].trim().to_string();
+                    let remaining = text[sent..].trim().to_string();
                     if !remaining.is_empty() {
                         self.emitted_paragraphs.lock().await.push(remaining);
                     }
@@ -35811,6 +35823,203 @@ Done."#;
                 "{channel_name}: trailing-newline divergence must not replay the final paragraph"
             );
         }
+    }
+
+    /// Coordinate contract of the confirmed-offset remap: verified prefixes
+    /// keep their offset, a rewrite floors to the last delivered paragraph
+    /// boundary, and the result always lands on a char boundary of the frame.
+    #[test]
+    fn remap_confirmed_offset_floors_rewrites_to_delivered_paragraph_boundaries() {
+        // A frame that still starts with the confirmed bytes keeps the offset.
+        assert_eq!(remap_confirmed_offset("a\n\nb\n\n", "a\n\nb\n\ncc"), 6);
+        // A rewrite inside the second confirmed paragraph floors to the end
+        // of the first: the rewritten paragraph is re-emitted, the intact one
+        // is not replayed.
+        assert_eq!(
+            remap_confirmed_offset("a\n\nSECRET\n\n", "a\n\n[REDACTED]\n\nrest"),
+            3
+        );
+        // A rewrite inside the first paragraph remaps to the frame start.
+        assert_eq!(
+            remap_confirmed_offset("SECRET\n\n", "[REDACTED]\n\nrest"),
+            0
+        );
+        // A restarted accumulation (DraftEvent::Clear) remaps to the start.
+        assert_eq!(remap_confirmed_offset("old text\n\n", "new"), 0);
+        // Multibyte text before the rewrite: the remap lands on the paragraph
+        // delimiter, which is always a char boundary.
+        let confirmed = "héllo\n\nSECRET\n\n";
+        let frame = "héllo\n\n[REDACTED]\n\n";
+        let remapped = remap_confirmed_offset(confirmed, frame);
+        assert_eq!(remapped, "héllo\n\n".len());
+        assert!(frame.is_char_boundary(remapped));
+    }
+
+    /// Cross-delta redaction regression for the confirmed-offset bookkeeping
+    /// (reviewer-blocking finding on the MultiMessage adapters): a
+    /// private-key-shaped secret spans two deltas. The first delta ends
+    /// mid-key after the adapter has already confirmed paragraphs — including
+    /// one inside the not-yet-redactable key region — so when the second
+    /// delta completes the key, the streaming redactor rewrites bytes BEFORE
+    /// the confirmed offset while the redacted frame stays LONGER than that
+    /// stale offset. A byte-count coordinate never notices (the old
+    /// `text.len() < sent_so_far` reset cannot fire) and slices the terminal
+    /// text at a dead coordinate; the confirmed-prefix bookkeeping must remap
+    /// and deliver the complete stop reason exactly once, with no replay of
+    /// confirmed paragraphs and no key material on the transport.
+    async fn assert_multi_message_cross_delta_redaction_remaps_confirmed_offset(
+        channel_name: &'static str,
+    ) {
+        use zeroclaw_runtime::agent::loop_::StreamDelta;
+
+        let intro = "Checked the requested deployment records.\n\n";
+        let key_body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ"; // gitleaks:allow
+        let summary = "The stored credential is ready to rotate.";
+        let stop_reason = "Stopped after reaching the tool-call limit.";
+        let key_marker = "-----BEGIN PRIVATE KEY-----";
+        // Keep content after the marker paragraph so streaming sanitization
+        // does not trim its `\n\n` delimiter before the adapter sees it. That
+        // makes the incomplete-key paragraph genuinely confirmed on the first
+        // frame; the later closing marker then redacts across that coordinate.
+        let delta_one = format!("{intro}{key_marker}\n\nKey bytes continue:");
+        let delta_two =
+            format!("\n{key_body}\n-----END PRIVATE KEY-----\n\n{summary}\n\n{stop_reason}");
+        let raw_response = format!("{delta_one}{delta_two}");
+
+        let channel_impl = Arc::new(DraftRecordingChannel::multi_message_cumulative(
+            channel_name,
+        ));
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        tx.send(StreamDelta::Text(delta_one.clone())).await.unwrap();
+        tx.send(StreamDelta::Text(delta_two)).await.unwrap();
+        drop(tx);
+
+        let streamed = Arc::new(Mutex::new(String::new()));
+        run_draft_updater_with_leak_detection(
+            channel,
+            "chat-1".to_string(),
+            "draft-1".to_string(),
+            no_tools(),
+            Arc::clone(&streamed),
+            zeroclaw_config::schema::LeakDetectionConfig::default(),
+            OutboundContentFormat::Markdown,
+            rx,
+        )
+        .await;
+
+        // Scenario preconditions: the first frame still carries the incomplete
+        // key marker (an incomplete key is not yet redactable), no frame ever
+        // carries key material, and the redaction on the second frame rewrote
+        // bytes before the previously confirmed offset while leaving the frame
+        // longer than that stale offset.
+        {
+            let frames = channel_impl.draft_updates.lock().await;
+            assert_eq!(
+                frames.first().map(String::as_str),
+                Some(delta_one.as_str()),
+                "{channel_name}: the first frame must pass through unredacted mid-key"
+            );
+            assert!(
+                frames.iter().all(|f| !f.contains(key_body)),
+                "{channel_name}: no draft frame may carry key material: {frames:?}"
+            );
+        }
+        let stale_offset = intro.len() + key_marker.len() + "\n\n".len();
+        let redacted_frame = streamed.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert!(
+            !redacted_frame.contains(key_body) && redacted_frame.contains("[REDACTED"),
+            "{channel_name}: the completed key must be redacted on the second frame: {redacted_frame:?}"
+        );
+        assert!(
+            !redacted_frame.as_bytes().starts_with(delta_one.as_bytes()),
+            "{channel_name}: the redaction must rewrite bytes before the confirmed offset"
+        );
+        assert!(
+            redacted_frame.len() > stale_offset,
+            "{channel_name}: the redacted frame must stay longer than the stale offset — a \
+             length-based reset never fires in this scenario"
+        );
+
+        // The confirmed offset must have been remapped onto the redacted
+        // frame: the intro stays confirmed, the rewritten paragraph was
+        // re-emitted in redacted form, and only the held stop reason remains.
+        let sent_so_far = channel_impl
+            .multi_message_confirmed_offset("chat-1", "draft-1")
+            .await;
+        assert_eq!(
+            &redacted_frame[sent_so_far..],
+            stop_reason,
+            "{channel_name}: after the remap, exactly the stop reason must remain unconfirmed"
+        );
+
+        // Finalize through the REAL final sanitizer and the production
+        // reconciliation, exactly as the neighboring regressions do.
+        let delivered_response = sanitize_channel_response_with_leak_detection(
+            &raw_response,
+            &[],
+            &zeroclaw_config::schema::LeakDetectionConfig::default(),
+        );
+        assert!(
+            !delivered_response.contains(key_body),
+            "{channel_name}: the final sanitizer must redact the credential"
+        );
+        let final_text =
+            cumulative_multi_message_final_text(&redacted_frame, &delivered_response, sent_so_far);
+        assert!(
+            !final_text.contains(key_body),
+            "{channel_name}: reconciliation must not resurrect the redacted key"
+        );
+        channel_impl
+            .finalize_draft("chat-1", "draft-1", &final_text, false)
+            .await
+            .unwrap();
+
+        let redacted_paragraph = redacted_frame[intro.len()..]
+            .split("\n\n")
+            .next()
+            .expect("the redacted frame keeps a paragraph where the key started")
+            .to_string();
+        let emitted = channel_impl.emitted_paragraphs.lock().await;
+        assert_eq!(
+            emitted.as_slice(),
+            [
+                intro.trim().to_string(),
+                key_marker.to_string(),
+                redacted_paragraph,
+                summary.to_string(),
+                stop_reason.to_string(),
+            ],
+            "{channel_name}: confirmed paragraphs stay put, the rewritten paragraph is re-sent \
+             in redacted form, and the complete stop reason arrives last untruncated"
+        );
+        assert_eq!(
+            emitted.iter().filter(|m| m.as_str() == stop_reason).count(),
+            1,
+            "{channel_name}: the complete stop reason must be delivered exactly once"
+        );
+        assert_eq!(
+            emitted
+                .iter()
+                .filter(|m| m.as_str() == intro.trim())
+                .count(),
+            1,
+            "{channel_name}: the confirmed intro paragraph must not be replayed"
+        );
+        assert!(
+            emitted.iter().all(|m| !m.contains(key_body)),
+            "{channel_name}: key material must never reach the transport: {emitted:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_message_redaction_spanning_deltas_remaps_confirmed_offset_discord() {
+        assert_multi_message_cross_delta_redaction_remaps_confirmed_offset("discord").await;
+    }
+
+    #[tokio::test]
+    async fn multi_message_redaction_spanning_deltas_remaps_confirmed_offset_matrix() {
+        assert_multi_message_cross_delta_redaction_remaps_confirmed_offset("matrix").await;
     }
 
     #[tokio::test]
