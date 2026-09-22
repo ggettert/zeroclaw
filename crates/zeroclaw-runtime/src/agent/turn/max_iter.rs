@@ -533,7 +533,7 @@ mod graceful_summary_metering_tests {
         let out = TOOL_LOOP_COST_TRACKING_CONTEXT
             .scope(
                 Some(ctx),
-                run_summary_with_events(&provider, String::new(), Some(&event_tx)),
+                run_summary_with_events(&provider, String::new(), Some(&event_tx), None),
             )
             .await
             .expect("graceful summary should succeed");
@@ -752,6 +752,7 @@ mod graceful_summary_metering_tests {
             &LoopKnobs::default(),
             Some(&tx),
             None,
+            None,
             budget,
             &mut crumb_present,
             super::super::DispatchTokenCounter::default(),
@@ -831,6 +832,7 @@ mod graceful_summary_metering_tests {
             &knobs,
             None,
             None,
+            None,
             0,
             &mut false,
             super::super::DispatchTokenCounter::default(),
@@ -900,6 +902,7 @@ mod graceful_summary_metering_tests {
             String::new(),
             "trace-req-img-drop",
             &knobs,
+            None,
             None,
             None,
             0,
@@ -975,6 +978,7 @@ mod graceful_summary_metering_tests {
             String::new(),
             "trace-req-img-inline",
             &knobs,
+            None,
             None,
             None,
             0,
