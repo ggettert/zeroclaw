@@ -5970,6 +5970,7 @@ async fn run_draft_updater(
 
 /// Retain the visible frame for MultiMessage finalization while applying the
 /// channel's outbound policy to both drafts and permanent narration flushes.
+#[allow(clippy::too_many_arguments)]
 async fn run_draft_updater_with_leak_detection(
     channel: Arc<dyn Channel>,
     reply_target: String,
