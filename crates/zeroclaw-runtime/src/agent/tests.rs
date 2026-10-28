@@ -820,6 +820,41 @@ async fn auto_save_stores_only_user_messages_in_memory() {
 }
 
 #[tokio::test]
+async fn issue_12002_autosave_preserves_turns() {
+    use zeroclaw_memory::MemoryCategory;
+
+    let (mem, _tmp) = make_sqlite_memory();
+    let model_provider = Box::new(ScriptedModelProvider::new(vec![
+        text_response("First reply"),
+        text_response("Second reply"),
+    ]));
+    let mut agent = build_agent_with_memory(model_provider, vec![], mem.clone(), true);
+    let turns = [
+        ("First user message", "issue-12002-session-first"),
+        ("Second user message", "issue-12002-session-second"),
+    ];
+
+    for (content, session_id) in turns {
+        agent.set_memory_session_id(Some(session_id.to_string()));
+        agent.turn(content).await.unwrap();
+    }
+
+    let entries = mem
+        .list(Some(&MemoryCategory::Conversation), None)
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 2, "Both turns must remain in memory");
+    assert_ne!(entries[0].key, entries[1].key);
+    for (content, session_id) in turns {
+        let entry = entries
+            .iter()
+            .find(|entry| entry.content == content)
+            .expect("Each original user message must remain in memory");
+        assert_eq!(entry.session_id.as_deref(), Some(session_id));
+    }
+}
+
+#[tokio::test]
 async fn auto_save_disabled_does_not_store() {
     let (mem, _tmp) = make_sqlite_memory();
     let model_provider = Box::new(ScriptedModelProvider::new(vec![text_response("hello")]));
