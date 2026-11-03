@@ -1,0 +1,107 @@
+name: Fork 12109 targeted validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: One bounded lane (start with shared)
+        required: true
+        type: choice
+        default: shared
+        options: [shared, root-cli, runtime, gateway, frontend, schema]
+      target_sha:
+        description: Published reviewed feature commit (full 40-hex SHA in this fork)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-12109-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: github.repository == 'ggettert/zeroclaw' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      STAGE: ${{ inputs.stage }}
+      TARGET_SHA: ${{ inputs.target_sha }}
+      CARGO_BUILD_JOBS: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+      RUSTUP_TOOLCHAIN: 1.98.0
+    steps:
+      - name: Validate dispatch before any checkout
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || exit 2
+          case "$STAGE" in shared|root-cli|runtime|gateway|frontend|schema) ;; *) exit 2;; esac
+          mkdir -p "$RUNNER_TEMP/12109-logs"
+          { date -u; uname -sm; df -h; free -h; nproc; ulimit -a; } > "$RUNNER_TEMP/12109-logs/preflight.log"
+          cat "$RUNNER_TEMP/12109-logs/preflight.log"
+          # A stop threshold, NOT a claim that these resources suffice.
+          (( $(df -Pk "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}') >= 10*1024*1024 )) || exit 3
+          (( $(awk '/MemAvailable:/ {print $2}' /proc/meminfo) >= 6*1024*1024 )) || exit 3
+      - name: Trusted launcher at workflow revision (not target input)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ggettert/zeroclaw
+          ref: ${{ github.workflow_sha }}
+          path: tooling
+          persist-credentials: false
+          sparse-checkout: scripts/ci/fork_12109_validation.sh
+          sparse-checkout-cone-mode: false
+      - name: Feature under test from fixed fork
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ggettert/zeroclaw
+          ref: ${{ inputs.target_sha }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+      - name: Verify exact source identity
+        run: |
+          set -euo pipefail
+          origin=$(git -C source remote get-url origin)
+          [[ "$origin" == https://github.com/ggettert/zeroclaw || "$origin" == https://github.com/ggettert/zeroclaw.git ]] || exit 2
+          [[ "$(git -C source rev-parse HEAD)" == "${TARGET_SHA,,}" ]] || exit 2
+          # Fixed baseline only; no arbitrary remote/ref and no branch-wide fetch.
+          git -C source fetch --no-tags --depth=1 origin 03b29bcc68eadf8bd03905b93d6867d3af9d7b87
+          printf 'tooling=%s\ntarget=%s\nstage=%s\n' "$(git -C tooling rev-parse HEAD)" "$(git -C source rev-parse HEAD)" "$STAGE" | tee "$RUNNER_TEMP/12109-logs/identity.log"
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        if: inputs.stage != 'frontend'
+        with:
+          toolchain: 1.98.0
+      - name: WASI fixture prerequisite (child Cargo inherits jobs=1)
+        if: inputs.stage == 'root-cli'
+        run: rustup target add --toolchain 1.98.0 wasm32-wasip2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: inputs.stage == 'frontend' || inputs.stage == 'schema'
+        with:
+          node-version-file: source/.nvmrc
+          package-manager-cache: false
+      - name: Run only trusted stage commands
+        run: |
+          set -euo pipefail
+          bash tooling/scripts/ci/fork_12109_validation.sh 2>&1 | tee "$RUNNER_TEMP/12109-logs/stage.log"
+      - name: Final resource diagnostics
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/12109-logs"
+          { df -h; free -h; } | tee "$RUNNER_TEMP/12109-logs/resources-final.log"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: fork-12109-diagnostics
+          path: ${{ runner.temp }}/12109-logs/*.log
+          retention-days: 7
+          if-no-files-found: warn
