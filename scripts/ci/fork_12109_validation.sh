@@ -82,7 +82,7 @@ case "$STAGE" in
     ;;
   root-cli)
     # Real backend + agent runtime are required for Quickstart, without default channel bundle.
-    tests -p zeroclaw --no-default-features --features agent-runtime,plugins-wasm-cranelift --bin zeroclaw -- \
+    tests -p zeroclaw --no-default-features --features agent-runtime,plugins-wasm-cranelift,channel-filesystem --bin zeroclaw -- \
       registry_selection_preserves_legacy_and_explicit_override_precedence \
       combined_search_retains_actual_origins_and_pinned_install_is_still_ambiguous \
       a_failed_union_keeps_the_previous_cache_and_never_fetches_archives \
@@ -96,7 +96,7 @@ case "$STAGE" in
       successful_choice_labels_do_not_disclose_credentials_or_collapse_publishers \
       multiple_origins_remain_visible_and_create_downloads_only_the_selected_origin \
       selecting_two_publishers_of_one_name_is_refused_before_create
-    tests -p zeroclaw --no-default-features --features agent-runtime,plugins-wasm-cranelift --test component -- \
+    tests -p zeroclaw --no-default-features --features agent-runtime,plugins-wasm-cranelift,channel-filesystem --test component -- \
       multi_registry_update_requires_explicit_origin_after_original_publisher_removes_package \
       approval_from_environment_selected_origin_pins_that_origin_in_the_real_cli_command \
       successful_union_search_shows_distinct_private_origin_labels_not_credentials
