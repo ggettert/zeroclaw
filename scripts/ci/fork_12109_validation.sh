@@ -112,7 +112,7 @@ case "$STAGE" in
   frontend)
     run node --version
     # No npm test lifecycle (it also runs unrelated pretest suites). Type-only imports erased.
-    run node --experimental-strip-types --test web/src/pages/pluginCatalog.test.ts |
+    run node --experimental-strip-types --test-reporter=tap --test web/src/pages/pluginCatalog.test.ts |
       tee "$RUNNER_TEMP/12109-logs/frontend-test.log"
     grep -Eq '^# pass [1-9][0-9]*$' "$RUNNER_TEMP/12109-logs/frontend-test.log" || exit 4
     ;;
