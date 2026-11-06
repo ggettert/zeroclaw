@@ -1,0 +1,172 @@
+{
+  "schema": 1,
+  "target_sha": "bc57034d6d86ff451bd3d71a4f92f4311b87640f",
+  "base_sha": "03b29bcc68eadf8bd03905b93d6867d3af9d7b87",
+  "changed_files": [
+    {
+      "path": "crates/zeroclaw-gateway/src/api_plugins.rs",
+      "mode": "100644",
+      "sha256": "cba06652b47682d131325efbe48867231c081a8625a147df0474bdda74b3b997"
+    },
+    {
+      "path": "crates/zeroclaw-gateway/src/openapi.rs",
+      "mode": "100644",
+      "sha256": "1e06c674cc3e8c993115cff461cbb65c3ceb6eea45c09b48517c6c3cf3c63eed"
+    },
+    {
+      "path": "crates/zeroclaw-gateway/tests/plugin_catalog_literal_compat.rs",
+      "mode": "100644",
+      "sha256": "5ebe39a21df2864a39acbe14368bc9392495813212e23e8e0899a6a97de84f56"
+    },
+    {
+      "path": "crates/zeroclaw-plugins/examples/registry_argv_fixture.rs",
+      "mode": "100644",
+      "sha256": "c2cf4f345afc369ef635fce728ac2249c04c63d13578893c44d94d4c98fa7820"
+    },
+    {
+      "path": "crates/zeroclaw-plugins/src/catalog.rs",
+      "mode": "100644",
+      "sha256": "ee071e571447f7b90ab1b21f0373a2bcc357020c8c57bd9e89cf6dcc7e7937a0"
+    },
+    {
+      "path": "crates/zeroclaw-plugins/src/registry.rs",
+      "mode": "100644",
+      "sha256": "479c23da3fa9d1951012e9bfebfe68539aa30ab9aa95161b5455b27738daee5b"
+    },
+    {
+      "path": "crates/zeroclaw-plugins/tests/registry_literal_compat.rs",
+      "mode": "100644",
+      "sha256": "15e1a293aaec3283c10fff3dfc077b33d37db77dc4938e98e3254e4fb7934258"
+    },
+    {
+      "path": "crates/zeroclaw-plugins/tests/registry_windows_commands.rs",
+      "mode": "100644",
+      "sha256": "0e12ab8effcfca1edccc32bd94eae5cbe6bd2c4fed29749aaa044787e08cf47b"
+    },
+    {
+      "path": "crates/zeroclaw-runtime/locales/en/cli.ftl",
+      "mode": "100644",
+      "sha256": "bf523b4fad95b6670558bf47a6001ccbc42137ced5798849762f7b5f410462cb"
+    },
+    {
+      "path": "crates/zeroclaw-runtime/locales/es/cli.ftl",
+      "mode": "100644",
+      "sha256": "4049381d36322b39eb7911d3c21f49ccffe56c8f4d4eed76c70c48847d40f348"
+    },
+    {
+      "path": "crates/zeroclaw-runtime/locales/fr/cli.ftl",
+      "mode": "100644",
+      "sha256": "4219c722581caab38004f082847def492104f923be1a2903b08ce377b4808ddc"
+    },
+    {
+      "path": "crates/zeroclaw-runtime/locales/ja/cli.ftl",
+      "mode": "100644",
+      "sha256": "643b0fd29964582cb675e768c96f749ee21e2ab344b2192b81854eb0fa545625"
+    },
+    {
+      "path": "crates/zeroclaw-runtime/locales/zh-CN/cli.ftl",
+      "mode": "100644",
+      "sha256": "cd69e5ae5c0089348fcd4ee9581e46170f195b6bd9b0249e40634accd5f2ace6"
+    },
+    {
+      "path": "crates/zeroclaw-runtime/src/i18n.rs",
+      "mode": "100644",
+      "sha256": "0385056011da0bb0d2682e0c5c1062699e60197cad33cd187ff3470a30e74f5d"
+    },
+    {
+      "path": "crates/zeroclaw-runtime/src/skills/suggestions.rs",
+      "mode": "100644",
+      "sha256": "677fa90f7c958faf13af361ffbe7ac9fec2501b864a0480ab92507d3ce5a10d7"
+    },
+    {
+      "path": "docs/book/src/plugins/distributing-plugins.md",
+      "mode": "100644",
+      "sha256": "7594ba3c0791a6c0404adbe725c180e0a68f8594c35003a31c2d0d16bc8bb8ac"
+    },
+    {
+      "path": "docs/book/src/plugins/index.md",
+      "mode": "100644",
+      "sha256": "d2b1267e1d6b711a09e684bba9658f2df8b299bbc025347e3b315b3efad707a5"
+    },
+    {
+      "path": "docs/book/src/reference/env-vars.md",
+      "mode": "100644",
+      "sha256": "4351691f87d08753ed46b21b60a5132a3e0353acfac1fb8a8fe95352c7498066"
+    },
+    {
+      "path": "scripts/ci/registry_windows_gate.ps1",
+      "mode": "100644",
+      "sha256": "82e652c339de83a1a99a7509e6cbd14a7df04998a440be546a2ea38c05d721b8"
+    },
+    {
+      "path": "src/main.rs",
+      "mode": "100644",
+      "sha256": "0fcd4536bfdf7076d7ea72a63f2fec49ca2cbb3b2230378f115e1b6ce5833ca8"
+    },
+    {
+      "path": "src/plugin_catalog.rs",
+      "mode": "100644",
+      "sha256": "166626fa93c19566da1a9a0574b8448424a5e7c0c107df7a8b15faee54f6a1dd"
+    },
+    {
+      "path": "src/plugin_registry.rs",
+      "mode": "100644",
+      "sha256": "e8033a9cbcb231f166ca128f9905326df9f82a811f8e1c14b838b5b5639c74a5"
+    },
+    {
+      "path": "src/plugins/egress_ceremony.rs",
+      "mode": "100644",
+      "sha256": "a1eea3c3bec4c996d1bc7753c0709a64f17f46653a21debbf25577b300e70d8e"
+    },
+    {
+      "path": "src/plugins/update.rs",
+      "mode": "100644",
+      "sha256": "5e200872d14d849d2c255e8a5967de89699ae1c1719ae2ca9ede3f793de9e854"
+    },
+    {
+      "path": "src/quickstart_plugins/mod.rs",
+      "mode": "100644",
+      "sha256": "ad6096664fd44f43360c0c1c164b5113a7c9481a1051db9bc9639d615ce7470b"
+    },
+    {
+      "path": "src/quickstart_plugins/model.rs",
+      "mode": "100644",
+      "sha256": "fe4384c5eff1e723ee782aaadb0ed7feead923263c548f36b0d716e6948c5b91"
+    },
+    {
+      "path": "tests/component/mod.rs",
+      "mode": "100644",
+      "sha256": "56b9c7b3e0440034cefd125a7145c421f9443ecd2aecffd283035fb056b600a9"
+    },
+    {
+      "path": "tests/component/plugin_registry_windows_cli.rs",
+      "mode": "100644",
+      "sha256": "d379f260b36765626cd3b26dcfba8309fbfb6b3ba72f848ab1e7034be000c2f4"
+    },
+    {
+      "path": "tests/component/plugin_update_cli.rs",
+      "mode": "100644",
+      "sha256": "1c0f676b281f30ecfc2f42eba5f88763c93aec9efdad423336bfde2dd676709c"
+    },
+    {
+      "path": "web/src/lib/api.ts",
+      "mode": "100644",
+      "sha256": "a23c5d029550755f90b5bd2c9e91c067c3769ecf51a2cfc130b92c4744274ed6"
+    },
+    {
+      "path": "web/src/pages/Plugins.tsx",
+      "mode": "100644",
+      "sha256": "2cb2a2a320087ecc2003186e13bc657a4764fdf29d53af8250513160e9f55940"
+    },
+    {
+      "path": "web/src/pages/pluginCatalog.test.ts",
+      "mode": "100644",
+      "sha256": "10ce591d7a4e4dba2d35070626f670418f9401276e6165f2132fdc69d5e4e6d8"
+    },
+    {
+      "path": "web/src/pages/pluginCatalog.ts",
+      "mode": "100644",
+      "sha256": "07640d116504a54c1650d2e8b91086bdac6815b33b18ea21269c495f701c7fff"
+    }
+  ]
+}
