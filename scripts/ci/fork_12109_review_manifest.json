@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "target_sha": "bc57034d6d86ff451bd3d71a4f92f4311b87640f",
+  "target_sha": "f1f577c85348acce58a7d98b7462394043757a4d",
   "base_sha": "03b29bcc68eadf8bd03905b93d6867d3af9d7b87",
   "changed_files": [
     {
@@ -71,7 +71,7 @@
     {
       "path": "crates/zeroclaw-runtime/src/i18n.rs",
       "mode": "100644",
-      "sha256": "0385056011da0bb0d2682e0c5c1062699e60197cad33cd187ff3470a30e74f5d"
+      "sha256": "9812a42877a109a047450516f9de518cca4c311ba63aeca178b58087ef305e87"
     },
     {
       "path": "crates/zeroclaw-runtime/src/skills/suggestions.rs",
