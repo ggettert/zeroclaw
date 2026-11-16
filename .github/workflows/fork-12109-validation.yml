@@ -1,4 +1,4 @@
-name: Fork 12002 autosave reproduction
+name: Fork 12002 autosave preservation
 
 on:
   workflow_dispatch:
@@ -44,7 +44,13 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           printf 'source_and_workflow=%s\nupstream_base=%s\nfork_before_sync=%s\n' "$EXPECTED_SHA" "$UPSTREAM_BASE" "$FORK_BEFORE_SYNC"
           git status --short
-          sha256sum Cargo.lock crates/zeroclaw-runtime/src/agent/tests.rs .github/workflows/fork-12109-validation.yml
+          sha256sum Cargo.lock crates/zeroclaw-runtime/src/agent/{agent.rs,loop_.rs,tests.rs} .github/workflows/fork-12109-validation.yml
+          sha256sum --check <<'HASHES'
+          9ab4a3de612799c163319ae3c021e42341d57b67f47e0380aa0efad2deb893fe  Cargo.lock
+          e79e3cd67eb6f536bdd41d7edc9066125fe9498c47f0807645d670602aac92d4  crates/zeroclaw-runtime/src/agent/agent.rs
+          75cffbecd2355e136c40fa4ca8ac4ce8d417cc3f4837b88b368659149c66869f  crates/zeroclaw-runtime/src/agent/loop_.rs
+          84aed2fdada40e5f0b8e17e1fec5f6443f37df4bb9e8cdf71da2f063ce3218e2  crates/zeroclaw-runtime/src/agent/tests.rs
+          HASHES
           uname -sm; nproc; free -h; df -h
           (( $(df -Pk "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}') >= 7*1024*1024 )) || exit 3
       - name: Install existing CI toolchain on hosted runner only
@@ -56,16 +62,20 @@ jobs:
         run: |
           set -euo pipefail
           rustc --version; cargo --version; rustfmt --version
-          rustfmt --edition 2024 --check --config skip_children=true crates/zeroclaw-runtime/src/agent/tests.rs
+          rustfmt --edition 2024 --check --config skip_children=true crates/zeroclaw-runtime/src/agent/{agent.rs,loop_.rs,tests.rs}
       - name: Compile default-feature runtime library harness
         run: cargo test --locked -p zeroclaw-runtime --lib --no-run
-      - name: Discover and run all three exact tests
+      - name: Discover and run all seven exact tests
         run: |
           set -euo pipefail
           tests=(
             agent::tests::auto_save_stores_only_user_messages_in_memory
             agent::tests::issue_12002_autosave_preserves_same_session
             agent::tests::issue_12002_autosave_preserves_different_sessions
+            agent::tests::issue_12002_autosave_preserves_identical_inputs_and_legacy_entry
+            agent::tests::issue_12002_streamed_autosave_preserves_identical_inputs
+            agent::tests::issue_12002_steering_autosave_preserves_each_admitted_input
+            agent::tests::auto_save_disabled_does_not_store
           )
           for test_name in "${tests[@]}"; do
             cargo test --locked -p zeroclaw-runtime --lib "$test_name" -- --exact --list | tee "$RUNNER_TEMP/discovery.log"
