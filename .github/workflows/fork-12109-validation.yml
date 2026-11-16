@@ -1,18 +1,14 @@
-name: Fork 12002 autosave preservation
-
+name: Fork 12002 gateway autosave A-B
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
-  group: fork-12002-reproduction
+  group: fork-12002-live-acceptance
   cancel-in-progress: false
-
 jobs:
-  reproduce:
-    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name == 'workflow_dispatch'
+  acceptance:
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-live-20261116'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
@@ -22,78 +18,68 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
-      CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_TERM_COLOR: never
       RUSTUP_TOOLCHAIN: 1.98.0
-      UPSTREAM_BASE: 6e83982340297d4682c5399792549ee9e2f275f0
-      FORK_BEFORE_SYNC: e2ea0c8a5ac20c82321fcbdfff26f080c45b0f7d
+      CARGO_TARGET_DIR: ${{ runner.temp }}/12002-target
     steps:
-      - name: Checkout this reviewed workflow revision
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Checkout frozen validation harness
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          repository: ggettert/zeroclaw
           ref: ${{ github.workflow_sha }}
-          fetch-depth: 1
+          path: harness
           persist-credentials: false
           submodules: false
-      - name: Verify source identity and resources
+      - name: Checkout exact baseline
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: zeroclaw-labs/zeroclaw
+          ref: 69ea0ae1ae6f662ea9952e6247c764289adfe6a2
+          path: baseline
+          persist-credentials: false
+          submodules: false
+      - name: Checkout exact reviewed fix
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: ggettert/zeroclaw
+          ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+          path: fixed
+          persist-credentials: false
+          submodules: false
+      - name: Verify frozen source and harness
         env:
-          EXPECTED_SHA: ${{ github.workflow_sha }}
+          EXPECTED_HARNESS: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          printf 'source_and_workflow=%s\nupstream_base=%s\nfork_before_sync=%s\n' "$EXPECTED_SHA" "$UPSTREAM_BASE" "$FORK_BEFORE_SYNC"
-          git status --short
-          sha256sum Cargo.lock crates/zeroclaw-runtime/src/agent/{agent.rs,loop_.rs,tests.rs} .github/workflows/fork-12109-validation.yml
-          sha256sum --check <<'HASHES'
-          9ab4a3de612799c163319ae3c021e42341d57b67f47e0380aa0efad2deb893fe  Cargo.lock
-          e79e3cd67eb6f536bdd41d7edc9066125fe9498c47f0807645d670602aac92d4  crates/zeroclaw-runtime/src/agent/agent.rs
-          75cffbecd2355e136c40fa4ca8ac4ce8d417cc3f4837b88b368659149c66869f  crates/zeroclaw-runtime/src/agent/loop_.rs
-          84aed2fdada40e5f0b8e17e1fec5f6443f37df4bb9e8cdf71da2f063ce3218e2  crates/zeroclaw-runtime/src/agent/tests.rs
-          HASHES
-          uname -sm; nproc; free -h; df -h
-          (( $(df -Pk "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}') >= 7*1024*1024 )) || exit 3
-      - name: Install existing CI toolchain on hosted runner only
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+          test "$(git -C harness rev-parse HEAD)" = "$EXPECTED_HARNESS"
+          test -z "$(git -C harness status --porcelain)"
+          echo "harness_sha=$EXPECTED_HARNESS features=FULL_DEFAULTS toolchain=1.98.0"
+          sha256sum harness/scripts/ci/12002_gateway_acceptance.py harness/scripts/ci/12002_source_manifest.json harness/.github/workflows/fork-12109-validation.yml
+          python3 harness/scripts/ci/12002_verify_sources.py
+          python3 -B harness/scripts/ci/12002_gateway_acceptance.py --self-test
+          free -h; df -h
+      - name: Install pinned required CI toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
           toolchain: 1.98.0
-          components: rustfmt
-      - name: Toolchain and changed-file formatting
+      - name: Install existing CI Linux dependencies
+        run: timeout --signal=TERM --kill-after=10s 300s bash baseline/scripts/ci/apt_install.sh mold libasound2-dev
+      - name: Build and prove baseline then fixed
         run: |
           set -euo pipefail
-          rustc --version; cargo --version; rustfmt --version
-          rustfmt --edition 2024 --check --config skip_children=true crates/zeroclaw-runtime/src/agent/{agent.rs,loop_.rs,tests.rs}
-      - name: Compile default-feature runtime library harness
-        run: cargo test --locked -p zeroclaw-runtime --lib --no-run
-      - name: Discover and run all seven exact tests
-        run: |
-          set -euo pipefail
-          tests=(
-            agent::tests::auto_save_stores_only_user_messages_in_memory
-            agent::tests::issue_12002_autosave_preserves_same_session
-            agent::tests::issue_12002_autosave_preserves_different_sessions
-            agent::tests::issue_12002_autosave_preserves_identical_inputs_and_legacy_entry
-            agent::tests::issue_12002_streamed_autosave_preserves_identical_inputs
-            agent::tests::issue_12002_steering_autosave_preserves_each_admitted_input
-            agent::tests::auto_save_disabled_does_not_store
-          )
-          for test_name in "${tests[@]}"; do
-            cargo test --locked -p zeroclaw-runtime --lib "$test_name" -- --exact --list | tee "$RUNNER_TEMP/discovery.log"
-            grep -Fx "$test_name: test" "$RUNNER_TEMP/discovery.log"
-            grep -Fx '1 test, 0 benchmarks' "$RUNNER_TEMP/discovery.log"
+          rustc --version; cargo --version
+          mkdir -p "$RUNNER_TEMP/12002-binaries"
+          for case in baseline fixed; do
+            python3 harness/scripts/ci/12002_verify_sources.py
+            (cd "$case" && cargo build --locked --bin zeroclaw)
+            install -m 0555 "$CARGO_TARGET_DIR/debug/zeroclaw" "$RUNNER_TEMP/12002-binaries/$case"
+            sha256sum "$RUNNER_TEMP/12002-binaries/$case"
+            python3 harness/scripts/ci/12002_verify_sources.py
+            timeout --signal=TERM --kill-after=20s 200s python3 -B harness/scripts/ci/12002_gateway_acceptance.py --case "$case" --binary "$RUNNER_TEMP/12002-binaries/$case"
           done
-          result=0
-          for test_name in "${tests[@]}"; do
-            set +e
-            cargo test --locked -p zeroclaw-runtime --lib "$test_name" -- --exact --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/test-result.log"
-            rc=${PIPESTATUS[0]}
-            set -e
-            printf 'TEST_RESULT name=%s exit=%s\n' "$test_name" "$rc"
-            if (( rc != 0 )); then result=1; fi
-            grep -Eq '^test result: (ok|FAILED)\. [01] passed; [01] failed; 0 ignored;' "$RUNNER_TEMP/test-result.log" || result=1
-            grep -Fx 'running 1 test' "$RUNNER_TEMP/test-result.log" || result=1
-          done
-          exit "$result"
-      - name: Final resource diagnostics
+          echo 'ACCEPTANCE baseline=overwrite-reproduced fixed=both-retained external_llm=loopback-stub'
+      - name: Final source and resource evidence
         if: always()
-        run: df -h; free -h
+        run: |
+          python3 harness/scripts/ci/12002_verify_sources.py
+          sha256sum "$RUNNER_TEMP"/12002-binaries/* 2>/dev/null || true
+          free -h; df -h
