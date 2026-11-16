@@ -20,7 +20,6 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_TERM_COLOR: never
       RUSTUP_TOOLCHAIN: 1.98.0
-      CARGO_TARGET_DIR: ${{ runner.temp }}/12002-target
     steps:
       - name: Checkout frozen validation harness
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -64,6 +63,8 @@ jobs:
       - name: Install existing CI Linux dependencies
         run: timeout --signal=TERM --kill-after=10s 300s bash baseline/scripts/ci/apt_install.sh mold libasound2-dev
       - name: Build and prove baseline then fixed
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/12002-target
         run: |
           set -euo pipefail
           rustc --version; cargo --version
