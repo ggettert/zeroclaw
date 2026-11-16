@@ -63,13 +63,14 @@ jobs:
       - name: Install existing CI Linux dependencies
         run: timeout --signal=TERM --kill-after=10s 300s bash baseline/scripts/ci/apt_install.sh mold libasound2-dev
       - name: Build and prove baseline then fixed
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/12002-target
         run: |
           set -euo pipefail
           rustc --version; cargo --version
           mkdir -p "$RUNNER_TEMP/12002-binaries"
           for case in baseline fixed; do
+            export CARGO_TARGET_DIR="$RUNNER_TEMP/12002-target-$case"
+            test ! -e "$CARGO_TARGET_DIR"
+            printf 'case=%s fresh_cargo_target=%s\n' "$case" "$CARGO_TARGET_DIR"
             python3 harness/scripts/ci/12002_verify_sources.py
             (cd "$case" && cargo build --locked --bin zeroclaw)
             install -m 0555 "$CARGO_TARGET_DIR/debug/zeroclaw" "$RUNNER_TEMP/12002-binaries/$case"
