@@ -1,0 +1,1934 @@
+name: Frozen 12002 actual upstream Ubuntu checks
+'on':
+  workflow_dispatch: null
+permissions:
+  contents: read
+concurrency:
+  group: 12002-upstream-ci-20261117
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+        components: rustfmt
+    - name: Verify source before Check formatting
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+    - name: Verify source after Check formatting
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  repo-structure:
+    name: Repository Structure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - name: Verify source before Guard declared submodules
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Guard declared submodules
+      shell: bash
+      run: "set -euo pipefail\n\ngitlinks=\"$(mktemp)\"\ndeclared=\"$(mktemp)\"\nallowed=\"$(mktemp)\"\n\ngit ls-files\
+        \ -s | awk '$1 == \"160000\" { print $4 }' | sort > \"$gitlinks\"\n{ git config --file .gitmodules --get-regexp\
+        \ '^submodule\\..*\\.path$' 2>/dev/null || true; } \\\n  | awk '{ print $2 }' | sort > \"$declared\"\nprintf\
+        \ '%s\\n' 'docs/book/po' > \"$allowed\"\n\nif ! cmp -s \"$gitlinks\" \"$declared\"; then\n  echo \"::error::Gitlink\
+        \ paths must exactly match .gitmodules paths.\"\n  echo \"Index gitlinks:\"\n  sed 's/^/  /' \"$gitlinks\"\
+        \n  echo \".gitmodules paths:\"\n  sed 's/^/  /' \"$declared\"\n  exit 1\nfi\n\nif ! cmp -s \"$gitlinks\"\
+        \ \"$allowed\"; then\n  echo \"::error::Unexpected submodule path. Update this guard when adding an intentional\
+        \ submodule.\"\n  echo \"Allowed submodule paths:\"\n  sed 's/^/  /' \"$allowed\"\n  echo \"Actual gitlink\
+        \ paths:\"\n  sed 's/^/  /' \"$gitlinks\"\n  exit 1\nfi\n"
+    - name: Verify source after Guard declared submodules
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test translation release submodule handling
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test translation release submodule handling
+      run: scripts/release/refresh-translations.test.sh
+    - name: Verify source after Test translation release submodule handling
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test release version preparation failures
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test release version preparation failures
+      run: python3 scripts/release/bump-version.test.py
+    - name: Verify source after Test release version preparation failures
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test early Apple release credential validation
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test early Apple release credential validation
+      run: python3 scripts/release/apple_preflight_test.py
+    - name: Verify source after Test early Apple release credential validation
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test monthly outdated result classification
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test monthly outdated result classification
+      run: bash scripts/ci/monthly_outdated_result.test.sh
+    - name: Verify source after Test monthly outdated result classification
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test release tool installer mappings
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test release tool installer mappings
+      run: bash scripts/ci/install_release_tool.test.sh
+    - name: Verify source after Test release tool installer mappings
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test binary size safeguard
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test binary size safeguard
+      run: python3 scripts/ci/check_binary_size_test.py
+    - name: Verify source after Test binary size safeguard
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test crates.io publish ordering and preflight
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test crates.io publish ordering and preflight
+      run: python3 scripts/release/publish_crates_test.py
+    - name: Verify source after Test crates.io publish ordering and preflight
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test crates.io release commit resolution
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test crates.io release commit resolution
+      run: python3 scripts/release/resolve_crates_release_test.py
+    - name: Verify source after Test crates.io release commit resolution
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test crates.io version-bump preflight trigger
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test crates.io version-bump preflight trigger
+      run: bash scripts/ci/crates_preflight_trigger.test.sh
+    - name: Verify source after Test crates.io version-bump preflight trigger
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test CLI-only artifact ratchet
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test CLI-only artifact ratchet
+      run: bash scripts/ci/cli_only_ratchet.test.sh
+    - name: Verify source after Test CLI-only artifact ratchet
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test apt install timeout and retry behavior
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test apt install timeout and retry behavior
+      run: bash scripts/ci/apt_install.test.sh
+    - name: Verify source after Test apt install timeout and retry behavior
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Guard release attestation contract
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Guard release attestation contract
+      run: python3 scripts/ci/release_attestation_contract_test.py
+    - name: Verify source after Guard release attestation contract
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test CLI and hardware path-label ownership
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test CLI and hardware path-label ownership
+      run: bash scripts/ci/path_labeler_matrix.test.sh
+    - name: Verify source after Test CLI and hardware path-label ownership
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test hardware feature test-lane contract
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test hardware feature test-lane contract
+      run: bash scripts/ci/hardware_feature_test_lane.test.sh
+    - name: Verify source after Test hardware feature test-lane contract
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test release announcement composer
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test release announcement composer
+      run: bash scripts/ci/release_post_text.test.sh
+    - name: Verify source after Test release announcement composer
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test binary size report
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test binary size report
+      run: bash scripts/ci/binary_size_report.test.sh
+    - name: Verify source after Test binary size report
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test dependency footprint report
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test dependency footprint report
+      run: bash scripts/ci/dependency_footprint.test.sh
+    - name: Verify source after Test dependency footprint report
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test docs stable metadata promotion
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test docs stable metadata promotion
+      run: python3 scripts/docs/promote_stable_test.py
+    - name: Verify source after Test docs stable metadata promotion
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version-file: .nvmrc
+    - name: Verify source before Test docs version selector and root 404 redirect
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test docs version selector and root 404 redirect
+      run: node --test scripts/docs/version_selector_test.mjs scripts/docs/root_404_test.mjs
+    - name: Verify source after Test docs version selector and root 404 redirect
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+        components: clippy
+    - name: Verify source before Install system dependencies
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install system dependencies
+      run: bash scripts/ci/apt_install.sh libudev-dev ripgrep
+    - name: Verify source after Install system dependencies
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Ensure web/dist placeholder exists
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Ensure web/dist placeholder exists
+      run: mkdir -p web/dist && touch web/dist/.gitkeep
+    - name: Verify source after Ensure web/dist placeholder exists
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Clippy runner contract tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Clippy runner contract tests
+      run: bash scripts/ci/run_clippy.test.sh
+    - name: Verify source after Clippy runner contract tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Clippy
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Clippy
+      shell: bash
+      run: "bash scripts/ci/run_clippy.sh \\\n  --scope workspace \\\n  --summary-title \"Lint diagnostics\" \\\n\
+        \  --log-name cargo-clippy.log\n"
+      env:
+        RUST_CACHE_HIT: 'false'
+    - name: Verify source after Clippy
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Rustdoc warnings gate
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Rustdoc warnings gate
+      run: cargo doc --no-deps --workspace --exclude zeroclaw-desktop
+    - name: Verify source after Rustdoc warnings gate
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Comment hygiene gate (no issue refs / review notes / truncation artifacts)
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Comment hygiene gate (no issue refs / review notes / truncation artifacts)
+      run: 'bash scripts/ci/comment_hygiene_gate.test.sh
+
+        bash scripts/ci/comment_hygiene_gate.sh
+
+        '
+    - name: Verify source after Comment hygiene gate (no issue refs / review notes / truncation artifacts)
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Container build inputs gate (root build.rs reaches every source build)
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Container build inputs gate (root build.rs reaches every source build)
+      run: 'bash scripts/ci/container_build_inputs_gate.test.sh
+
+        bash scripts/ci/container_build_inputs_gate.sh
+
+        '
+    - name: Verify source after Container build inputs gate (root build.rs reaches every source build)
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before act-local artifact compatibility tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: act-local artifact compatibility tests
+      run: bash scripts/dev/act-local.test.sh
+    - name: Verify source after act-local artifact compatibility tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  build:
+    name: ${{ matrix.label }} ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: ubuntu-24.04
+          target: x86_64-unknown-linux-gnu
+          cmd: build
+          label: Build
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+        targets: ${{ matrix.target }}
+    - name: Verify source before Install Linux system dependencies
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: runner.os == 'Linux'
+    - name: Install Linux system dependencies
+      if: runner.os == 'Linux'
+      run: bash scripts/ci/apt_install.sh mold libasound2-dev
+    - name: Verify source after Install Linux system dependencies
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Ensure web/dist placeholder exists
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Ensure web/dist placeholder exists
+      shell: bash
+      run: mkdir -p web/dist && touch web/dist/.gitkeep
+    - name: Verify source after Ensure web/dist placeholder exists
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before ${{ matrix.label }}
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: ${{ matrix.label }}
+      shell: bash
+      run: "set +e\ncargo_log=\"${RUNNER_TEMP}/cargo-build-${{ matrix.target }}.log\"\nSECONDS=0\ncargo ${{ matrix.cmd\
+        \ }} --profile ci --locked --target ${{ matrix.target }} 2>&1 | tee \"$cargo_log\"\ncargo_status=${PIPESTATUS[0]}\n\
+        duration_seconds=$SECONDS\nset -e\n\nworkspace_path_compiles=\"$(grep -E -c 'Compiling.*\\([^)]*zeroclaw'\
+        \ \"$cargo_log\" || true)\"\ntotal_compiles=\"$(grep -c 'Compiling' \"$cargo_log\" || true)\"\ndownloaded_crates=\"\
+        $(grep -c 'Downloaded' \"$cargo_log\" || true)\"\ncache_hit=\"${RUST_CACHE_HIT:-unknown}\"\nsummary_file=\"\
+        ${GITHUB_STEP_SUMMARY:-/dev/null}\"\n\n{\n  echo \"### ${{ matrix.label }} diagnostics: ${{ matrix.target\
+        \ }}\"\n  echo \"\"\n  echo \"| Field | Value |\"\n  echo \"| --- | --- |\"\n  echo \"| Target | \\`${{\
+        \ matrix.target }}\\` |\"\n  echo \"| Runner OS | \\`${{ runner.os }}\\` |\"\n  echo \"| Rust cache exact\
+        \ hit | \\`${cache_hit}\\` |\"\n  echo \"| Cargo duration | \\`${duration_seconds}s\\` |\"\n  echo \"| Cargo\
+        \ status | \\`${cargo_status}\\` |\"\n  echo \"| Workspace path compile lines | \\`${workspace_path_compiles}\\\
+        ` |\"\n  echo \"| Total compile lines | \\`${total_compiles}\\` |\"\n  echo \"| Downloaded crate lines |\
+        \ \\`${downloaded_crates}\\` |\"\n} >> \"$summary_file\"\n\nexit \"$cargo_status\"\n"
+      env:
+        RUST_CACHE_HIT: 'false'
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    - name: Verify source after ${{ matrix.label }}
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Check voice-wake
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: runner.os != 'Linux'
+    - name: Check voice-wake
+      if: runner.os != 'Linux'
+      shell: bash
+      run: cargo check --locked -p zeroclaw-channels --no-default-features --features voice-wake --target ${{ matrix.target
+        }}
+    - name: Verify source after Check voice-wake
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test voice-wake
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: runner.os == 'Linux'
+    - name: Test voice-wake
+      if: runner.os == 'Linux'
+      shell: bash
+      run: cargo test --locked -p zeroclaw-channels --no-default-features --features voice-wake --target ${{ matrix.target
+        }} --lib voice_wake
+      env:
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    - name: Verify source after Test voice-wake
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  check:
+    name: Check (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - name: no default features
+          cache-key: check
+          args: --workspace --exclude zeroclaw-desktop --no-default-features
+          sys_deps: ''
+          rustflags: -D warnings
+        - name: default features, all targets
+          cache-key: check-all-targets
+          args: --workspace --exclude zeroclaw-desktop --all-targets
+          sys_deps: ''
+          rustflags: -D warnings
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+    - name: Verify source before Install system dependencies
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: matrix.sys_deps != ''
+    - name: Install system dependencies
+      if: matrix.sys_deps != ''
+      run: bash scripts/ci/apt_install.sh ${{ matrix.sys_deps }}
+    - name: Verify source after Install system dependencies
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Ensure web/dist placeholder exists
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Ensure web/dist placeholder exists
+      run: mkdir -p web/dist && touch web/dist/.gitkeep
+    - name: Verify source after Ensure web/dist placeholder exists
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Check
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Check
+      run: cargo check --locked ${{ matrix.args }}
+    - name: Verify source after Check
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  check-plugin-backends:
+    name: Check (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout-minutes || 20 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - name: plugins cranelift backend
+          features: plugins-wasm-cranelift
+          suite: components
+          cache-key: plugins-cranelift-components
+        - name: plugins cranelift runtime
+          features: plugins-wasm-cranelift
+          suite: runtime
+          cache-key: plugins-cranelift-runtime
+          timeout-minutes: 30
+        - name: plugins pulley backend
+          features: plugins-wasm-pulley
+          suite: check
+          cache-key: check-plugin-backends
+        - name: plugins runtime-only backend
+          features: plugins-wasmtime
+          suite: check
+          cache-key: check-plugin-backends
+        - name: plugin artifact smoke
+          features: plugins-wasm-cranelift
+          suite: smoke
+          cache-key: plugins-artifact-smoke
+        - name: plugins gateway ingress
+          features: plugins-wasm
+          suite: gateway
+          cache-key: plugins-gateway-ingress
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - name: Verify source before Verify plugin backend change filter
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Verify plugin backend change filter
+      run: bash scripts/ci/plugin_backend_change_filter.test.sh
+    - name: Verify source after Verify plugin backend change filter
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Detect plugin backend changes
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Detect plugin backend changes
+      id: changed
+      run: 'base="69ea0ae1ae6f662ea9952e6247c764289adfe6a2"
+
+        if [ -z "$base" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+
+        run="$(git diff --name-only "$base" HEAD | bash scripts/ci/plugin_backend_change_filter.sh)"
+
+        echo "run=$run" >> "$GITHUB_OUTPUT"
+
+        '
+    - name: Verify source after Detect plugin backend changes
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7
+      if: steps.changed.outputs.run == 'true'
+      with:
+        toolchain: 1.98.0
+    - name: Verify source before Install plugin fixture target
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.features == 'plugins-wasm-cranelift'
+    - name: Install plugin fixture target
+      if: steps.changed.outputs.run == 'true' && matrix.features == 'plugins-wasm-cranelift'
+      run: rustup target add wasm32-wasip2
+    - name: Verify source after Install plugin fixture target
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Check
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.suite != 'runtime' && matrix.suite != 'gateway' && matrix.suite
+        != 'smoke'
+    - name: Check
+      if: steps.changed.outputs.run == 'true' && matrix.suite != 'runtime' && matrix.suite != 'gateway' && matrix.suite
+        != 'smoke'
+      run: cargo check --locked -p zeroclaw-plugins --no-default-features --features ${{ matrix.features }}
+    - name: Verify source after Check
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run plugin component tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'components'
+    - name: Run plugin component tests
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'components'
+      run: cargo test --locked -p zeroclaw-plugins --features plugins-wasm-cranelift --test channel_plugin_e2e --test
+        egress_plugin_e2e --test memory_plugin_e2e --test tool_plugin_timeout_e2e --test reference_plugin --test
+        reference_plugin_e2e --test tool_plugin_e2e --test socket_plugin_e2e --test websocket_plugin_e2e
+    - name: Verify source after Run plugin component tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run plugins lib unit tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'components'
+    - name: Run plugins lib unit tests
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'components'
+      run: cargo test --locked -p zeroclaw-plugins --no-default-features --features plugins-wasm-cranelift --lib
+    - name: Verify source after Run plugins lib unit tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run manifest signing command tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'components'
+    - name: Run manifest signing command tests
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'components'
+      run: cargo test --locked -p zeroclaw-plugins --no-default-features --features plugins-wasm-cranelift --example
+        sign_manifest
+    - name: Verify source after Run manifest signing command tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run runtime live-config plugin regressions
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'runtime'
+    - name: Run runtime live-config plugin regressions
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'runtime'
+      run: cargo test --locked -p zeroclaw-runtime --features plugins-wasm-cranelift --lib agent::plugin_live_config
+    - name: Verify source after Run runtime live-config plugin regressions
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run runtime plugin admission regressions
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'runtime'
+    - name: Run runtime plugin admission regressions
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'runtime'
+      run: "set -euo pipefail\npython3 - <<'LATE_PY'\nimport hashlib\nimport json\nimport os\nfrom pathlib import\
+        \ Path\nimport re\nimport selectors\nimport signal\nimport stat\nimport subprocess\nimport sys\nimport threading\n\
+        import tempfile\nimport time\n\nworkspace = Path.cwd().resolve(strict=True)\nrunner_temp = Path(os.environ['RUNNER_TEMP']).resolve(strict=True)\n\
+        root = Path(tempfile.mkdtemp(prefix='late-tool-search-', dir=runner_temp))\nroot.chmod(0o700)\ncases = root\
+        \ / 'cases'\ncases.mkdir(mode=0o700)\n\n# One source of truth per invocation: actual checkout/fixture inputs,\
+        \ original\n# command argv and actual process result. No source import or shell expansion.\ndef digest(path,\
+        \ limit):\n    meta = path.lstat()\n    if not stat.S_ISREG(meta.st_mode) or meta.st_uid != os.getuid()\
+        \ or meta.st_size <= 0 or meta.st_size > limit:\n        raise RuntimeError('proof input ownership/type/size\
+        \ refused')\n    value = hashlib.sha256()\n    count = 0\n    with path.open('rb') as reader:\n        while\
+        \ data := reader.read(65536):\n            count += len(data)\n            if count > limit:\n         \
+        \       raise RuntimeError('proof hash size refused')\n            value.update(data)\n    if count != meta.st_size:\n\
+        \        raise RuntimeError('proof input changed during hash')\n    return {'sha256': value.hexdigest(),\
+        \ 'bytes': count}\n\n\n# Process identity and retained direct-child ownership are adapted from\n# scripts/ci/quickstart_cli_evidence.py\
+        \ (process_identity / OwnedChild).\n# Selected contract: Linux, one main Python thread, default SIGCHLD,\
+        \ and no\n# concurrent/direct reap outside this owner. SIGKILL/kernel/host loss cannot\n# guarantee cleanup;\
+        \ uncertain ownership refuses numeric group signalling.\nPENDING_CANCELLATION = None\nDEFER_CANCELLATION\
+        \ = False\n\nclass Refusal(RuntimeError):\n    \"\"\"Errors contain stable codes, never input, config, or\
+        \ subprocess output.\"\"\"\n\ndef require(condition, code):\n    if not condition:\n        raise Refusal(code)\n\
+        \n\ndef cancellation_checkpoint():\n    require(PENDING_CANCELLATION is None, 'interrupted')\n\n\ndef owned_run_contract():\n\
+        \    require(sys.platform == 'linux' and hasattr(os, 'WNOWAIT') and hasattr(os, 'waitid')\n            and\
+        \ signal.getsignal(signal.SIGCHLD) == signal.SIG_DFL\n            and threading.current_thread() is threading.main_thread()\n\
+        \            and threading.active_count() == 1, 'process_wait_contract')\n\n\ndef process_identity(pid):\n\
+        \    \"\"\"Linux numeric birth fields only; never export proc comm/argv/environment.\"\"\"\n    require(type(pid)\
+        \ is int and pid > 0, \"process_identity\")\n    with open(\"/proc/\" + str(pid) + \"/stat\", \"rb\", buffering=0)\
+        \ as handle:\n        raw = handle.read(4097)\n    require(len(raw) <= 4096, \"process_stat_boundary\")\n\
+        \    left, right = raw.find(b\"(\"), raw.rfind(b\") \")\n    require(left > 0 and right > left, \"process_stat_schema\"\
+        )\n    fields = raw[right + 2:].split()\n    require(len(fields) > 19 and raw[:left].strip() == str(pid).encode(),\
+        \ \"process_stat_schema\")\n    try:\n        values = [int(fields[i]) for i in (1, 2, 3, 19)]\n    except\
+        \ ValueError:\n        raise Refusal(\"process_stat_schema\") from None\n    require(all(v >= 0 for v in\
+        \ values) and values[3] > 0, \"process_stat_schema\")\n    return {\"pid\": pid, \"parent_pid\": values[0],\
+        \ \"pgid\": values[1],\n            \"session\": values[2], \"start_ticks\": values[3], \"state\": fields[0].decode(\"\
+        ascii\")}\n\ndef group_exists(pgid, deadline, live_only=False):\n    \"\"\"Bounded observation, not signal0\
+        \ or ownership authorization.\"\"\"\n    with os.scandir(\"/proc\") as entries:\n        for count, entry\
+        \ in enumerate(entries):\n            require(count < 4096 and time.monotonic() < deadline, \"group_observation_boundary\"\
+        )\n            if not entry.name.isdigit():\n                continue\n            try:\n              \
+        \  current = process_identity(int(entry.name))\n            except (FileNotFoundError, ProcessLookupError):\n\
+        \                continue\n            if current[\"pgid\"] == pgid and (not live_only or current[\"state\"\
+        ] not in (\"Z\", \"X\")):\n                return True\n    return False\n\nclass OwnedChild:\n    \"\"\"\
+        Single-threaded Linux direct-child anchor, retained through group cleanup.\n\n    poll/wait below use WNOWAIT.\
+        \ No Popen.poll/wait, SIGCHLD reaper or concurrent\n    direct wait may retire this anchor before the last\
+        \ group signal.\n    \"\"\"\n    def __init__(self, pid, role, proc=None):\n        self.pid, self.role,\
+        \ self.proc = pid, role, proc\n        self.stdout = proc.stdout if proc is not None else None\n       \
+        \ self.parent = os.getpid()\n        self.identity = None\n        self.returncode = None\n        self.retired\
+        \ = False\n        self.direct_waits = 0\n        self.direct_reaped = False\n        self.signals = []\n\
+        \        self._evidence_cleanup = None\n\n    def bind(self, deadline):\n        require(self.role == \"\
+        command\", \"process_role\")\n        owned_run_contract()\n        while True:\n            require(time.monotonic()\
+        \ < deadline, \"process_bind_timeout\")\n            self._observe()\n            current = process_identity(self.pid)\n\
+        \            require(current[\"parent_pid\"] == self.parent, \"process_parent\")\n            if current[\"\
+        pgid\"] == self.pid and current[\"session\"] == self.pid:\n                self.identity = {k: current[k]\
+        \ for k in\n                                 (\"pid\", \"parent_pid\", \"pgid\", \"session\", \"start_ticks\"\
+        )}\n                return self\n            time.sleep(0.02)\n\n    def _observe(self):\n        require(not\
+        \ self.retired, \"process_retired\")\n        if self.proc is not None and self.proc.returncode is not None:\n\
+        \            self.retired = True\n            raise Refusal(\"process_already_reaped\")\n        try:\n\
+        \            result = os.waitid(os.P_PID, self.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)\n        except\
+        \ ChildProcessError:\n            self.retired = True\n            raise Refusal(\"process_already_reaped\"\
+        ) from None\n        if result is not None:\n            require(result.si_pid == self.pid and result.si_code\
+        \ in\n                    (os.CLD_EXITED, os.CLD_KILLED, os.CLD_DUMPED), \"process_wait_identity\")\n  \
+        \          self.returncode = result.si_status if result.si_code == os.CLD_EXITED else -result.si_status\n\
+        \        return self.returncode\n\n    def poll(self):\n        require(self.identity is not None and not\
+        \ self.retired, \"process_unbound_or_retired\")\n        owned_run_contract()\n        code = self._observe()\n\
+        \        current = process_identity(self.pid)\n        require(all(current[k] == v for k, v in self.identity.items()),\
+        \ \"process_identity_changed\")\n        return code\n\n    def wait(self, timeout):\n        \"\"\"Exit\
+        \ observation only. Direct reap belongs exclusively to stop().\"\"\"\n        end = time.monotonic() + timeout\n\
+        \        while True:\n            cancellation_checkpoint()\n            code = self.poll()\n          \
+        \  if code is not None:\n                return code\n            require(time.monotonic() < end, \"subprocess_timeout\"\
+        )\n            time.sleep(0.02)\n\n    def signal_group(self, sig):\n        require(sig in (signal.SIGTERM,\
+        \ signal.SIGKILL), \"process_signal\")\n        self.poll()  # Direct waitability + birth/parent/session/PGID\
+        \ immediately before signal.\n        os.killpg(self.identity[\"pgid\"], sig)\n        self.signals.append(int(sig))\n\
+        \n    def stop(self):\n        if self._evidence_cleanup is not None:\n            return self._evidence_cleanup\n\
+        \        absent, verified, failure = False, False, None\n        try:\n            self.poll()\n       \
+        \     verified = True\n            for sig, seconds in ((signal.SIGTERM, 10), (signal.SIGKILL, 10)):\n \
+        \               try:\n                    self.signal_group(sig)\n                except ProcessLookupError:\n\
+        \                    self.poll()  # ESRCH is not a replacement ownership proof.\n                end = time.monotonic()\
+        \ + seconds\n                while time.monotonic() < end:\n                    exited = self.poll() is\
+        \ not None\n                    if exited:\n                        if sig == signal.SIGKILL:\n        \
+        \                    break\n                        try:\n                            if not group_exists(self.pid,\
+        \ end, live_only=True):\n                                break\n                        except Refusal as\
+        \ error:\n                            if str(error) != \"group_observation_boundary\":\n               \
+        \                 raise\n                            break  # TERM budget exhausted; revalidate before KILL.\n\
+        \                    time.sleep(0.02)\n            self.poll()\n            require(self.returncode is not\
+        \ None, \"process_exit_unobserved\")\n            # Retire BEFORE direct wait so an interrupt/read/wait\
+        \ fault cannot\n            # authorize a later numeric killpg after reap or PID retirement.\n         \
+        \   self.retired = True\n            self.direct_waits += 1\n            # WNOWAIT already observed this\
+        \ exact direct child's terminal code.\n            # Suppress Popen's destructor reaper BEFORE the sole\
+        \ final wait,\n            # including if that wait faults after consuming the exit status.\n          \
+        \  if self.proc is not None:\n                self.proc.returncode = self.returncode\n            waited,\
+        \ status = os.waitpid(self.pid, os.WNOHANG)\n            require(waited == self.pid, \"process_direct_wait\"\
+        )\n            self.direct_reaped = True\n            self.returncode = os.waitstatus_to_exitcode(status)\n\
+        \            if self.proc is not None:\n                self.proc.returncode = self.returncode\n       \
+        \     while group_exists(self.pid, end):\n                require(time.monotonic() < end, \"process_group_remains\"\
+        )\n                time.sleep(0.02)\n            absent = True\n        except BaseException as error:\n\
+        \            failure = str(error) if isinstance(error, Refusal) else \"process_cleanup_fault\"\n       \
+        \ self._evidence_cleanup = {\n            \"pid\": self.pid, \"role\": self.role, \"identity\": self.identity,\n\
+        \            \"identity_verified\": verified, \"ownership_retired\": self.retired,\n            \"direct_waits\"\
+        : self.direct_waits, \"direct_reaped\": self.direct_reaped,\n            \"group_absent\": absent, \"returncode\"\
+        : self.returncode, \"failure\": failure,\n            \"signals\": self.signals}\n        return self._evidence_cleanup\n\
+        \n\ndef stop_owned(child):\n    require(isinstance(child, OwnedChild), 'process_owner_required')\n    return\
+        \ child.stop()\n\n\ndef cleanup_proved(result):\n    return (result.get(\"direct_reaped\") is True and result.get(\"\
+        group_absent\") is True\n            and result.get(\"identity_verified\") is True and result.get(\"ownership_retired\"\
+        ) is True\n            and result.get(\"direct_waits\") == 1 and result.get(\"failure\") is None)\n\n\n\
+        def run(argv, cap, seconds=None, env=None):\n    global DEFER_CANCELLATION\n    cancellation_checkpoint()\n\
+        \    owned_run_contract()\n    process = child = selector = None\n    output = bytearray()\n    deadline\
+        \ = None if seconds is None else time.monotonic() + seconds\n    after_exit = None\n    code = error = cleanup\
+        \ = None\n    previous_deferral = DEFER_CANCELLATION\n    DEFER_CANCELLATION = True\n    try:\n        process\
+        \ = subprocess.Popen(argv, cwd=workspace, env=env, stdout=subprocess.PIPE,\n                           \
+        \        stderr=subprocess.STDOUT, start_new_session=True)\n        child = OwnedChild(process.pid, 'command',\
+        \ process)\n        # Do not honor a newly latched interruption between registration and\n        # identity\
+        \ acquisition; the finally below already retains the owner.\n        child.bind(time.monotonic() + 1)\n\
+        \        cancellation_checkpoint()\n        selector = selectors.DefaultSelector()\n        os.set_blocking(process.stdout.fileno(),\
+        \ False)\n        selector.register(process.stdout, selectors.EVENT_READ)\n        while selector.get_map():\n\
+        \            cancellation_checkpoint()\n            if deadline is not None and time.monotonic() >= deadline:\n\
+        \                raise Refusal('owned proof command timeout')\n            if child.poll() is not None:\n\
+        \                after_exit = after_exit or time.monotonic()\n                if time.monotonic() - after_exit\
+        \ > 5:\n                    raise Refusal('owned proof command pipe remained open after exit')\n       \
+        \     for key, _ in selector.select(0.1):\n                data = os.read(key.fd, 4096)\n              \
+        \  if not data:\n                    selector.unregister(key.fileobj)\n                    continue\n  \
+        \              if len(output) + len(data) > cap:\n                    raise Refusal('owned proof command\
+        \ output overflow')\n                output.extend(data)\n        code = child.wait(timeout=10)  # WNOWAIT\
+        \ observation, never a direct reap.\n    except BaseException as failure:\n        error = failure\n   \
+        \ finally:\n        # No cancellation checkpoint until stop AND every owned close finish.\n        if child\
+        \ is not None:\n            try:\n                cleanup = stop_owned(child)\n                if not cleanup_proved(cleanup)\
+        \ and error is None:\n                    error = Refusal('owned proof command cleanup refused')\n     \
+        \       except BaseException as failure:\n                if error is None:\n                    error =\
+        \ failure\n        if selector is not None:\n            try:\n                selector.close()\n      \
+        \      except BaseException as failure:\n                if error is None:\n                    error =\
+        \ failure\n        if process is not None and process.stdout is not None:\n            try:\n          \
+        \      process.stdout.close()\n                require(process.stdout.closed is True, 'process_pipe_close')\n\
+        \            except BaseException as failure:\n                if error is None:\n                    error\
+        \ = failure\n        DEFER_CANCELLATION = previous_deferral\n    if PENDING_CANCELLATION is not None and\
+        \ error is None:\n        error = Refusal('interrupted')\n    if error is not None:\n        print(bytes(output).decode('utf-8',\
+        \ errors='replace'), end='', flush=True)\n        raise error\n    return code, bytes(output)\n\n\ndef checked(argv,\
+        \ cap=2 * 1024 * 1024, seconds=240):\n    code, data = run(argv, cap, seconds)\n    print(data.decode('utf-8',\
+        \ errors='replace'), end='', flush=True)\n    if code:\n        raise SystemExit(code if code > 0 else 1)\n\
+        \    return data.decode('utf-8', errors='strict').strip()\n\n\ndef exclusive_json(path, value):\n    data\
+        \ = json.dumps(value, sort_keys=True, separators=(',', ':')).encode()\n    if len(data) > 32768:\n     \
+        \   raise RuntimeError('fixture receipt overflow')\n    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL,\
+        \ 0o600)\n    with os.fdopen(fd, 'wb') as writer:\n        writer.write(data)\n        writer.flush()\n\n\
+        \ndef interrupted(signum, _frame):\n    global PENDING_CANCELLATION\n    if PENDING_CANCELLATION is None:\n\
+        \        PENDING_CANCELLATION = signum\n    if not DEFER_CANCELLATION:\n        raise Refusal('interrupted')\n\
+        \nsignal.signal(signal.SIGTERM, interrupted)\nsignal.signal(signal.SIGINT, interrupted)\n\nexpected = ['tools::r5_namespace_tests::late_tool_search_real_guest_metadata_preflight',\
+        \ 'tools::r5_namespace_tests::late_tool_search_deferred_mcp_registry_owner', 'tools::r5_namespace_tests::late_tool_search_deferred_mcp_delegate_retirement',\
+        \ 'tools::r5_namespace_tests::late_tool_search_deferred_mcp_pipeline_retirement', 'tools::r5_namespace_tests::late_tool_search_deferred_mcp_skill_direct_retirement',\
+        \ 'tools::r5_namespace_tests::late_tool_search_deferred_mcp_skill_pipeline_retirement', 'tools::r5_namespace_tests::late_tool_search_mcp_search_select_activation',\
+        \ 'tools::r5_namespace_tests::late_tool_search_builtin_only_views', 'tools::r5_namespace_tests::late_tool_search_builtin_only_schema_selection',\
+        \ 'tools::r5_namespace_tests::late_tool_search_no_host_disabled_mcp_keeps_real_guest', 'tools::r5_namespace_tests::late_tool_search_no_host_connect_disabled_keeps_real_guest',\
+        \ 'tools::r5_namespace_tests::late_tool_search_no_host_ungranted_mcp_keeps_real_guest', 'tools::r5_namespace_tests::late_tool_search_no_host_eager_mcp_keeps_real_guest',\
+        \ 'tools::r5_namespace_tests::late_tool_search_no_host_listing_mcp_keeps_real_guest', 'tools::r5_namespace_tests::late_tool_search_no_host_empty_mcp_keeps_real_guest',\
+        \ 'tools::r5_namespace_tests::late_tool_search_no_host_filtered_mcp_keeps_real_guest', 'tools::r5_namespace_tests::late_tool_search_no_host_empty_builtin_catalog_keeps_real_guest',\
+        \ 'tools::r5_namespace_tests::late_tool_search_helper_denied_keeps_no_guest_recovery', 'tools::r5_namespace_tests::late_tool_search_caller_principal_context',\
+        \ 'tools::r5_namespace_tests::late_tool_search_recovery_cannot_reintroduce_guest', 'tools::r5_namespace_tests::late_tool_search_shared_registry_no_reconnect',\
+        \ 'tools::r5_namespace_tests::late_tool_search_minimal_full_compiled_semantics', 'tools::r5_namespace_tests::late_tool_search_registration_order_and_hidden_specs']\n\
+        prefix = 'tools::r5_namespace_tests::late_tool_search'\nmanifest = workspace / 'crates/zeroclaw-plugins/tests/fixtures/tool-fixture/Cargo.toml'\n\
+        cargo_version = checked(['cargo', '+1.98.0', '-Vv'])\nrust_version = checked(['rustc', '+1.98.0', '-vV'])\n\
+        installed = checked(['rustup', 'target', 'list', '--installed', '--toolchain', '1.98.0'])\nif 'wasm32-wasip2'\
+        \ not in installed.splitlines():\n    raise RuntimeError('required installed wasm32-wasip2 target absent')\n\
+        head = checked(['git', 'rev-parse', 'HEAD'])\ntree = checked(['git', 'rev-parse', 'HEAD^{tree}'])\nparents\
+        \ = checked(['git', 'show', '-s', '--format=%P', 'HEAD']).split()\ninputs = ['Cargo.toml', 'Cargo.lock',\
+        \ 'crates/zeroclaw-plugins/tests/fixtures/tool-fixture/Cargo.toml',\n          'crates/zeroclaw-plugins/tests/fixtures/tool-fixture/src/lib.rs']\n\
+        inputs += [str(path.relative_to(workspace)) for path in sorted((workspace / 'wit/v0').iterdir()) if path.is_file()]\n\
+        if len(inputs) != 17:\n    raise RuntimeError('unexpected WIT input inventory')\ninput_rows = [{'path':\
+        \ path, **digest(workspace / path, 4 * 1024 * 1024)} for path in inputs]\ncomponents = {}\ncommands = []\n\
+        for kind, flags in [('default', []), ('namespace', ['--features', 'namespace-tool-search'])]:\n    target\
+        \ = root / f'{kind}-target'\n    target.mkdir(mode=0o700)\n    argv = ['cargo', '+1.98.0', 'build', '--locked',\
+        \ '--manifest-path', str(manifest),\n            '--package', 'zeroclaw-tool-plugin-fixture', '--target',\
+        \ 'wasm32-wasip2',\n            '--target-dir', str(target)] + flags\n    checked(argv)\n    component =\
+        \ (target / 'wasm32-wasip2/debug/zeroclaw_tool_plugin_fixture.wasm').resolve(strict=True)\n    if not component.is_relative_to(target):\n\
+        \        raise RuntimeError('component output escaped owned target')\n    components[kind] = {'path': str(component),\
+        \ **digest(component, 64 * 1024 * 1024)}\n    commands.append(argv)\nfor row in input_rows:\n    if digest(workspace\
+        \ / row['path'], 4 * 1024 * 1024) != {k: row[k] for k in ['sha256', 'bytes']}:\n        raise RuntimeError('build\
+        \ altered locked source inputs')\nreceipt = {'schema': 1, 'execution_kind': 'github-actions', 'head': head,\
+        \ 'tree': tree,\n           'parents': parents, 'reported_event_sha': os.environ['GITHUB_SHA'],\n      \
+        \     'run_id': os.environ['GITHUB_RUN_ID'], 'attempt': os.environ['GITHUB_RUN_ATTEMPT'],\n           'job_key':\
+        \ os.environ['GITHUB_JOB'], 'workflow_ref': os.environ['GITHUB_WORKFLOW_REF'],\n           'workflow_sha':\
+        \ os.environ['GITHUB_WORKFLOW_SHA'], 'matrix': 'plugins-wasm-cranelift/runtime',\n           'cargo_version':\
+        \ cargo_version, 'rust_version': rust_version,\n           'inputs': input_rows, 'commands': commands, 'components':\
+        \ components}\nfor tool in ['cargo', 'rustc']:\n    path = Path(checked(['rustup', 'which', '--toolchain',\
+        \ '1.98.0', tool])).resolve(strict=True)\n    receipt[f'{tool}_binary'] = digest(path, 512 * 1024 * 1024)\n\
+        receipt_path = root / 'fixture-receipt.json'\nexclusive_json(receipt_path, receipt)\nenv = dict(os.environ)\n\
+        env.update(ZEROCLAW_LATE_TOOL_SEARCH_DEFAULT_COMPONENT=components['default']['path'],\n           ZEROCLAW_LATE_TOOL_SEARCH_COMPONENT=components['namespace']['path'],\n\
+        \           ZEROCLAW_LATE_TOOL_SEARCH_FIXTURE_RECEIPT=str(receipt_path),\n           ZEROCLAW_LATE_TOOL_SEARCH_CASE_RECEIPTS=str(cases))\n\
+        base = ['cargo', 'test', '--locked', '-p', 'zeroclaw-runtime', '--features', 'plugins-wasm-cranelift', '--lib',\
+        \ '--']\n# Keep the original larger OR selection and its order; new prefix is appended.\nselectors_old =\
+        \ ['plugin_runtime::', 'tools::tests::shared_ceiling', 'tools::tests::repeated_loader',\n              \
+        \   'tools::tests::auto_discover', 'tools::tests::colliding_plugin',\n                 'tools::tests::plugin_tls_coherence']\n\
+        # The ignored tests in the whole selection must be exactly the 23: one\n# that lost its #[ignore], or another\
+        \ ignored test --include-ignored\n# would sweep in, refuses the listing.\ncode, listing = run(base + selectors_old\
+        \ + [prefix, '--ignored', '--list'], 2 * 1024 * 1024, env=env)\nprint(listing.decode('utf-8', errors='replace'),\
+        \ end='', flush=True)\nlisted = re.findall(rb'^(\\S+): test$', listing, re.M)\nif code or sorted(name.decode()\
+        \ for name in listed) != sorted(expected):\n    raise RuntimeError('exact twenty-three namespace listing\
+        \ refused')\ncode, output = run(base + selectors_old + [prefix, '--include-ignored'], 16 * 1024 * 1024,\
+        \ env=env)\nprint(output.decode('utf-8', errors='replace'), end='', flush=True)\npassed = re.findall(rb'^test\
+        \ (tools::r5_namespace_tests::late_tool_search\\w*) \\.\\.\\. ok$', output, re.M)\nif code or sorted(name.decode()\
+        \ for name in passed) != sorted(expected):\n    raise RuntimeError('exact twenty-three namespace execution\
+        \ refused')\nif not re.search(rb'^test result: ok\\.', output, re.M):\n    raise RuntimeError('successful\
+        \ runtime harness summary missing')\nactual_paths = sorted(path.name for path in cases.iterdir())\nif actual_paths\
+        \ != sorted(name.rsplit('::', 1)[-1] + '.json' for name in expected):\n    raise RuntimeError('unexpected\
+        \ case receipt inventory')\nexported = 0\nfor name in expected:\n    path = cases / (name.rsplit('::', 1)[-1]\
+        \ + '.json')\n    digest(path, 512 * 1024)\n    data = path.read_bytes()\n    item = json.loads(data)\n\
+        \    if set(item) != {'schema', 'name', 'passed', 'cleanup_ok', 'events', 'test_executable', 'runtime_source_sha256',\
+        \ 'fixture_receipt_sha256'}:\n        raise RuntimeError('case receipt schema refused')\n    if item['name']\
+        \ != name.rsplit('::', 1)[-1] or item['schema'] != 1 or item['passed'] is not True or item['cleanup_ok']\
+        \ is not True:\n        raise RuntimeError('case receipt result refused')\n    if item['fixture_receipt_sha256']\
+        \ != digest(receipt_path, 32768)['sha256']:\n        raise RuntimeError('case fixture binding refused')\n\
+        \    if item['runtime_source_sha256'] != digest(workspace / 'crates/zeroclaw-runtime/src/tools/scoped.rs',\
+        \ 4 * 1024 * 1024)['sha256']:\n        raise RuntimeError('case source binding refused')\n    if len(item['events'])\
+        \ > 4096 or not re.fullmatch('[0-9a-f]{64}', item['test_executable']['sha256']):\n        raise RuntimeError('case\
+        \ trace/executable binding refused')\n    exported += len(data)\n    if exported > 9 * 1024 * 1024:\n  \
+        \      raise RuntimeError('case receipt export overflow')\n    print('LATE_CASE_RECEIPT ' + data.decode('utf-8'),\
+        \ flush=True)\nprint('LATE_FIXTURE_RECEIPT ' + receipt_path.read_text(), flush=True)\nprint('LATE_TOOL_SEARCH_NAMED_PASS\
+        \ 23', flush=True)\nLATE_PY\n"
+    - name: Verify source after Run runtime plugin admission regressions
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run channel plugin activation e2e
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'runtime'
+    - name: Run channel plugin activation e2e
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'runtime'
+      run: cargo test --locked --features plugins-wasm-cranelift --test plugin_channel_runtime_e2e
+    - name: Verify source after Run channel plugin activation e2e
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run channel egress boundary e2e
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.features == 'plugins-wasm-cranelift' && matrix.suite !=
+        'smoke'
+    - name: Run channel egress boundary e2e
+      if: steps.changed.outputs.run == 'true' && matrix.features == 'plugins-wasm-cranelift' && matrix.suite !=
+        'smoke'
+      run: cargo test --locked --features plugins-wasm-cranelift --test channel_egress_e2e
+    - name: Verify source after Run channel egress boundary e2e
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run channel WebSocket lifecycle e2e
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'runtime'
+    - name: Run channel WebSocket lifecycle e2e
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'runtime'
+      run: cargo test --locked --features plugins-wasm-cranelift --test channel_websocket_e2e
+    - name: Verify source after Run channel WebSocket lifecycle e2e
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run root CLI plugin tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'runtime'
+    - name: Run root CLI plugin tests
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'runtime'
+      run: 'cargo test --locked --features plugins-wasm-cranelift --bin zeroclaw
+
+        cargo test --locked --features plugins-wasm-cranelift --test component -- plugin_info_cli plugin_update_cli
+
+        '
+    - name: Verify source after Run root CLI plugin tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Verify plugin artifact smoke harness
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'smoke'
+    - name: Verify plugin artifact smoke harness
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'smoke'
+      run: 'bash scripts/ci/plugin_artifact_smoke.test.sh
+
+        python3 scripts/ci/plugin_smoke_provider_test.py
+
+        '
+    - name: Verify source after Verify plugin artifact smoke harness
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run plugin artifact smoke
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'smoke'
+    - name: Run plugin artifact smoke
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'smoke'
+      run: "cargo build --locked --features plugins-wasm-cranelift --bin zeroclaw\nbash scripts/ci/build_plugin_smoke_packages.sh\
+        \ \"$RUNNER_TEMP/plugin-smoke-packages\"\nbash scripts/ci/plugin_artifact_smoke.sh \\\n  --binary target/debug/zeroclaw\
+        \ \\\n  --expect host \\\n  --packages \"$RUNNER_TEMP/plugin-smoke-packages\" \\\n  --label \"debug build\
+        \ / x86_64-unknown-linux-gnu\"\n"
+    - name: Verify source after Run plugin artifact smoke
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Reject a plugin-bearing binary as host-free
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'smoke'
+    - name: Reject a plugin-bearing binary as host-free
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'smoke'
+      run: "inverted=0\nGITHUB_STEP_SUMMARY=\"\" bash scripts/ci/plugin_artifact_smoke.sh \\\n  --binary target/debug/zeroclaw\
+        \ --expect no-host || inverted=$?\nif [ \"$inverted\" -ne 1 ]; then\n  echo \"::error::Expected the host-free\
+        \ expectation to fail with status 1, got $inverted.\"\n  exit 1\nfi\n"
+    - name: Verify source after Reject a plugin-bearing binary as host-free
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run gateway plugin webhook tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'gateway'
+    - name: Run gateway plugin webhook tests
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'gateway'
+      run: cargo test --locked -p zeroclaw-gateway --features plugins-wasm --lib plugin_webhook
+    - name: Verify source after Run gateway plugin webhook tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run gateway plugin webhook golden frames
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'gateway'
+    - name: Run gateway plugin webhook golden frames
+      if: steps.changed.outputs.run == 'true' && matrix.suite == 'gateway'
+      run: cargo test --locked -p zeroclaw-gateway --features plugins-wasm --test golden_frames plugin_webhook
+    - name: Verify source after Run gateway plugin webhook golden frames
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  installer-drift:
+    name: Installer Drift
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      all_features: ${{ steps.all_features.outputs.value }}
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - name: Verify source before Test installer target detection
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test installer target detection
+      run: bash scripts/ci/install_target_triple_test.sh
+    - name: Verify source after Test installer target detection
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test installer CLI package-version parsing
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test installer CLI package-version parsing
+      run: bash scripts/ci/install_cli_package_version_test.sh
+    - name: Verify source after Test installer CLI package-version parsing
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+    - name: Verify source before Check generated install surfaces are in sync with the spec
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Check generated install surfaces are in sync with the spec
+      run: cargo generate installers --check
+    - name: Verify source after Check generated install surfaces are in sync with the spec
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Check source-backed SOP syntax reference
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Check source-backed SOP syntax reference
+      run: cargo generate sop-syntax --check
+    - name: Verify source after Check source-backed SOP syntax reference
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Check the OpenRPC contract matches zeroclaw-rpc-proto
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Check the OpenRPC contract matches zeroclaw-rpc-proto
+      run: cargo generate openrpc --check
+    - name: Verify source after Check the OpenRPC contract matches zeroclaw-rpc-proto
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Resolve canonical all-feature selection
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Resolve canonical all-feature selection
+      id: all_features
+      run: "set -euo pipefail\nvalue=\"$(cargo generate features --selection all)\"\nif [ -z \"$value\" ]; then\n\
+        \  echo \"::error::canonical all-feature selection is empty\"\n  exit 1\nfi\nprintf 'value=%s\\n' \"$value\"\
+        \ >> \"$GITHUB_OUTPUT\"\n"
+    - name: Verify source after Resolve canonical all-feature selection
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  msrv:
+    name: MSRV (declared floor)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117' && needs.installer-drift.result
+      == 'success'
+    needs:
+    - installer-drift
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - name: Verify source before Resolve declared MSRV
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Resolve declared MSRV
+      id: msrv
+      shell: bash
+      run: "set -euo pipefail\nmsrv=\"$(sed -n 's/^rust-version = \"\\([^\"]*\\)\"/\\1/p' Cargo.toml | head -1)\"\
+        \nif [[ ! \"$msrv\" =~ ^[0-9]+\\.[0-9]+(\\.[0-9]+)?$ ]]; then\n  echo \"::error::could not read [workspace.package]\
+        \ rust-version from Cargo.toml (got '${msrv}')\"\n  exit 1\nfi\necho \"version=$msrv\" >> \"$GITHUB_OUTPUT\"\
+        \necho \"Declared MSRV: $msrv\"\n"
+    - name: Verify source after Resolve declared MSRV
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: ${{ steps.msrv.outputs.version }}
+    - name: Verify source before Install system dependencies
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install system dependencies
+      run: bash scripts/ci/apt_install.sh libudev-dev
+    - name: Verify source after Install system dependencies
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Ensure web/dist placeholder exists
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Ensure web/dist placeholder exists
+      run: mkdir -p web/dist && touch web/dist/.gitkeep
+    - name: Verify source after Ensure web/dist placeholder exists
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Check at the declared MSRV
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Check at the declared MSRV
+      run: "cargo check --locked --workspace --exclude zeroclaw-desktop \\\n  --no-default-features \\\n  --features\
+        \ \"${{ needs.installer-drift.outputs.all_features }}\"\n"
+    - name: Verify source after Check at the declared MSRV
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  check-32bit:
+    name: Check (32-bit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+        targets: i686-unknown-linux-gnu
+    - name: Verify source before Install 32-bit system libraries
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install 32-bit system libraries
+      run: bash scripts/ci/apt_install.sh gcc-multilib
+    - name: Verify source after Install 32-bit system libraries
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Ensure web/dist placeholder exists
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Ensure web/dist placeholder exists
+      run: mkdir -p web/dist && touch web/dist/.gitkeep
+    - name: Verify source after Ensure web/dist placeholder exists
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Check (32-bit, no default features)
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Check (32-bit, no default features)
+      run: cargo check --locked --target i686-unknown-linux-gnu --no-default-features
+    - name: Verify source after Check (32-bit, no default features)
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+        components: rustfmt, clippy
+    - name: Verify source before Check firmware protocol crate
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Check firmware protocol crate
+      run: ./scripts/ci/firmware_protocol_gate.sh
+    - name: Verify source after Check firmware protocol crate
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Ensure web/dist placeholder exists
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Ensure web/dist placeholder exists
+      run: mkdir -p web/dist && touch web/dist/.gitkeep
+    - name: Verify source after Ensure web/dist placeholder exists
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Install test system dependencies
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install test system dependencies
+      run: bash scripts/ci/apt_install.sh mold expect python3
+    - name: Verify source after Install test system dependencies
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Install cargo-nextest
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install cargo-nextest
+      run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
+    - name: Verify source after Install cargo-nextest
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Run tests
+      run: cargo nextest run --locked --workspace --exclude zeroclaw-desktop
+      env:
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    - name: Verify source after Run tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run hardware feature lib unit tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Run hardware feature lib unit tests
+      run: cargo nextest run --locked --no-fail-fast -p zeroclaw-hardware --features hardware --lib
+      env:
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    - name: Verify source after Run hardware feature lib unit tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Golden-frame replay (informational)
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+      if: ${{ !cancelled() }}
+    - name: Golden-frame replay (informational)
+      if: ${{ !cancelled() }}
+      continue-on-error: true
+      run: "set +e\ncargo nextest run --locked --workspace --exclude zeroclaw-desktop \\\n  --run-ignored only --no-fail-fast\
+        \ \\\n  -E 'package(zeroclaw-gateway) & binary(golden_frames)' 2>&1 | tee golden-frames.log\nstatus=${PIPESTATUS[0]}\n\
+        {\n  echo \"### Golden-frame replay (informational)\"\n  if [ \"$status\" -eq 0 ]; then\n    echo \"All\
+        \ gateway golden-frame scenarios match their fixtures.\"\n  else\n    echo \"Gateway output drifted from\
+        \ the recorded fixtures. This does not fail CI.\"\n    echo \"Re-record intended changes with \\`ZEROCLAW_GOLDEN_RECORD=1\\\
+        ` (see \\`crates/zeroclaw-gateway/tests/golden_frames.rs\\`).\"\n    echo\n    echo '```text'\n    grep\
+        \ -E '^\\s+(FAIL|PASS) |golden-frame mismatch|^[+-] {0,3}[0-9]+ ' golden-frames.log | head -200\n    echo\
+        \ '```'\n  fi\n} >> \"$GITHUB_STEP_SUMMARY\"\nif [ \"$status\" -ne 0 ]; then\n  echo \"::warning title=Golden-frame\
+        \ drift::Gateway output differs from tests/golden fixtures (informational).\"\nfi\nexit \"$status\"\n"
+      env:
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    - name: Verify source after Golden-frame replay (informational)
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  test-channel-features:
+    name: Test (channel ${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - name: WeChat
+          command: 'cargo nextest run --locked -p zeroclaw-channels --no-default-features --features channel-wechat
+            --lib wechat::'
+        - name: Lark
+          command: 'cargo nextest run --locked -p zeroclaw-channels --no-default-features --features channel-lark
+            --lib lark::'
+        - name: Matrix
+          command: 'cargo nextest run --locked -p zeroclaw-channels --no-default-features --features channel-matrix
+            --lib matrix::'
+        - name: MQTT
+          command: cargo nextest run --locked -p zeroclaw-channels --no-default-features --features channel-mqtt
+            --lib orchestrator::mqtt
+        - name: QQ
+          command: cargo nextest run --locked -p zeroclaw-channels --no-default-features --features channel-qq --lib
+            qq::tests::health_check one_off_send_resolves_dotted_qq_alias deliver_announcement_routes_qq_to_qq_arm
+            deliver_announcement_rejects_disabled_qq_alias compiled_channel_keys_have_intentional_announcement_delivery_registration
+            compiled_channel_keys_have_intentional_one_shot_builder_support
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+        components: rustfmt, clippy
+    - name: Verify source before Ensure web/dist placeholder exists
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Ensure web/dist placeholder exists
+      run: mkdir -p web/dist && touch web/dist/.gitkeep
+    - name: Verify source after Ensure web/dist placeholder exists
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Install test system dependencies
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install test system dependencies
+      run: bash scripts/ci/apt_install.sh mold expect python3
+    - name: Verify source after Install test system dependencies
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Install cargo-nextest
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install cargo-nextest
+      run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
+    - name: Verify source after Install cargo-nextest
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run channel feature tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Run channel feature tests
+      run: ${{ matrix.command }}
+      env:
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    - name: Verify source after Run channel feature tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  test-tool-features:
+    name: Test (opt-in tools)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+    - name: Verify source before Ensure web/dist placeholder exists
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Ensure web/dist placeholder exists
+      run: mkdir -p web/dist && touch web/dist/.gitkeep
+    - name: Verify source after Ensure web/dist placeholder exists
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Install test system dependencies
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install test system dependencies
+      run: bash scripts/ci/apt_install.sh mold expect python3
+    - name: Verify source after Install test system dependencies
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Install cargo-nextest
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install cargo-nextest
+      run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
+    - name: Verify source after Install cargo-nextest
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run opt-in tool tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Run opt-in tool tests
+      run: cargo nextest run --locked --no-fail-fast -p zeroclaw -p zeroclaw-config -p zeroclaw-tools -p zeroclaw-runtime
+        -p zeroclaw-channels -p zeroclaw-gateway --features tools-compat --lib --test integration -E 'not binary(integration)
+        or test(/^report_template_tool_test::/)'
+      env:
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    - name: Verify source after Run opt-in tool tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Verify config-only feature cannot compile a concrete tool
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Verify config-only feature cannot compile a concrete tool
+      run: cargo nextest run --locked -p zeroclaw-tools --no-default-features --features zeroclaw-config/tool-notion
+        --lib --run-ignored only -E 'test(/^inventory::tests::config_only_notion_feature_does_not_compile_owner$/)'
+      env:
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    - name: Verify source after Verify config-only feature cannot compile a concrete tool
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  test-cli-only:
+    name: Test (CLI-only build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+        components: clippy
+        targets: wasm32-wasip2
+    - name: Verify source before Install test system dependencies
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install test system dependencies
+      run: bash scripts/ci/apt_install.sh mold expect python3
+    - name: Verify source after Install test system dependencies
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Install cargo-nextest
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install cargo-nextest
+      run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
+    - name: Verify source after Install cargo-nextest
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Resolve the CLI-only feature set
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Resolve the CLI-only feature set
+      id: features
+      run: 'list="$(cargo run --quiet --locked -p xtask --bin generate -- features --selection cli-only --target
+        x86_64-unknown-linux-gnu)"
+
+        echo "list=${list}" >> "$GITHUB_OUTPUT"
+
+        '
+    - name: Verify source after Resolve the CLI-only feature set
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Clippy (CLI-only build)
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Clippy (CLI-only build)
+      run: cargo clippy --locked -p zeroclaw --all-targets --no-default-features --features "${{ steps.features.outputs.list
+        }}" -- -D warnings
+    - name: Verify source after Clippy (CLI-only build)
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Test (CLI-only build)
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Test (CLI-only build)
+      run: cargo nextest run --locked -p zeroclaw --no-default-features --features "${{ steps.features.outputs.list
+        }}" --lib --bins --test component --test integration --test system --test architecture
+    - name: Verify source after Test (CLI-only build)
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Artifact ratchet (CLI-only build)
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Artifact ratchet (CLI-only build)
+      run: 'cargo build --locked -p zeroclaw --bin zeroclaw --no-default-features --features "${{ steps.features.outputs.list
+        }}"
+
+        bash scripts/ci/cli_only_ratchet.sh run x86_64-unknown-linux-gnu target/debug/zeroclaw
+
+        '
+    - name: Verify source after Artifact ratchet (CLI-only build)
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  memory-postgres-test:
+    name: Test (PostgreSQL Memory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+        env:
+          POSTGRES_USER: zeroclaw_test
+          POSTGRES_PASSWORD: zeroclaw_test
+          POSTGRES_DB: zeroclaw_test
+        ports:
+        - 5432:5432
+        options: --health-cmd "pg_isready -U zeroclaw_test -d zeroclaw_test" --health-interval 10s --health-timeout
+          5s --health-retries 5
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+    - name: Verify source before Ensure web/dist placeholder exists
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Ensure web/dist placeholder exists
+      run: mkdir -p web/dist && touch web/dist/.gitkeep
+    - name: Verify source after Ensure web/dist placeholder exists
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Install mold linker
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install mold linker
+      run: bash scripts/ci/apt_install.sh mold
+    - name: Verify source after Install mold linker
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Install cargo-nextest
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install cargo-nextest
+      run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
+    - name: Verify source after Install cargo-nextest
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run memory-postgres feature tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Run memory-postgres feature tests
+      run: cargo nextest run --locked -p zeroclaw-memory --features memory-postgres
+      env:
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    - name: Verify source after Run memory-postgres feature tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run PostgreSQL acceptance tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Run PostgreSQL acceptance tests
+      run: cargo test --locked -p zeroclaw-memory --features memory-postgres -- --ignored --test-threads=1
+      env:
+        ZEROCLAW_TEST_POSTGRES_URL: postgres://zeroclaw_test:zeroclaw_test@127.0.0.1:5432/zeroclaw_test
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    - name: Verify source after Run PostgreSQL acceptance tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  parallel-runtime-test:
+    name: Parallel Runtime Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+    - name: Verify source before Ensure web/dist placeholder exists
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Ensure web/dist placeholder exists
+      run: mkdir -p web/dist && touch web/dist/.gitkeep
+    - name: Verify source after Ensure web/dist placeholder exists
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Install mold linker
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install mold linker
+      run: bash scripts/ci/apt_install.sh mold
+    - name: Verify source after Install mold linker
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Repeat parallel runtime tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Repeat parallel runtime tests
+      run: ./scripts/ci/parallel_runtime_test_gate.sh
+      env:
+        ZEROCLAW_PARALLEL_TEST_SCOPE: all
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    - name: Verify source after Repeat parallel runtime tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  test-landlock:
+    name: Test (Landlock)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+    - name: Verify source before Ensure web/dist placeholder exists
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Ensure web/dist placeholder exists
+      run: mkdir -p web/dist && touch web/dist/.gitkeep
+    - name: Verify source after Ensure web/dist placeholder exists
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Install mold linker
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install mold linker
+      run: bash scripts/ci/apt_install.sh mold
+    - name: Verify source after Install mold linker
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Install cargo-nextest
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install cargo-nextest
+      run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
+    - name: Verify source after Install cargo-nextest
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run Landlock tests
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Run Landlock tests
+      run: cargo nextest run --locked -p zeroclaw-runtime --features sandbox-landlock -- landlock
+      env:
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    - name: Verify source after Run Landlock tests
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  security:
+    name: Security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+    - name: Verify source before Install cargo-deny
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install cargo-deny
+      run: "curl -LsSf https://github.com/EmbarkStudios/cargo-deny/releases/download/0.19.9/cargo-deny-0.19.9-x86_64-unknown-linux-musl.tar.gz\
+        \ \\\n  | tar zxf - -C ~/.cargo/bin --strip-components=1\n"
+    - name: Verify source after Install cargo-deny
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Validate scoped lru advisory exception
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Validate scoped lru advisory exception
+      run: python3 scripts/ci/lru_advisory_scope_test.py
+    - name: Verify source after Validate scoped lru advisory exception
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Check licenses, sources, and advisories
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Check licenses, sources, and advisories
+      run: cargo deny check
+    - name: Verify source after Check licenses, sources, and advisories
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Lockfile integrity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Lockfile integrity
+      run: cargo verify-project && cargo fetch --locked
+    - name: Verify source after Lockfile integrity
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Validate YAML workflow syntax
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Validate YAML workflow syntax
+      run: "pip install pyyaml -q 2>/dev/null || true\npython3 - <<'PY'\nimport yaml\n\nfor path in (\n    \".github/workflows/ci.yml\"\
+        ,\n    \".github/workflows/windows-tests.yml\",\n    \".github/workflows/project-dashboard-plan.yml\",\n\
+        \    \".github/workflows/pr-risk-labeler.yml\",\n    \".github/workflows/pr-size-labeler.yml\",\n    \"\
+        .github/workflows/release-stable-manual.yml\",\n):\n    yaml.safe_load(open(path))\n    print(f\"{path}:\
+        \ valid\")\nPY\n"
+    - name: Verify source after Validate YAML workflow syntax
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Validate GitHub helper scripts
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Validate GitHub helper scripts
+      run: python3 -m unittest discover -s scripts/github -p '*_test.py'
+    - name: Verify source after Validate GitHub helper scripts
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Install cargo-audit
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install cargo-audit
+      run: "curl -LsSf https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv0.22.2/cargo-audit-x86_64-unknown-linux-gnu-v0.22.2.tgz\
+        \ \\\n  | tar zxf - -C ~/.cargo/bin --strip-components=1\n"
+    - name: Verify source after Install cargo-audit
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run cargo audit (RustSec advisory database)
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Run cargo audit (RustSec advisory database)
+      run: cargo audit
+    - name: Verify source after Run cargo audit (RustSec advisory database)
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  web-permission-tests:
+    name: Web Permission Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version-file: .nvmrc
+    - name: Verify source before Install web dependencies
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install web dependencies
+      working-directory: web
+      run: npm ci
+    - name: Verify source after Install web dependencies
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Typecheck generated dashboard contract
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Typecheck generated dashboard contract
+      run: cargo web check
+    - name: Verify source after Typecheck generated dashboard contract
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run permission and catalog regressions
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Run permission and catalog regressions
+      working-directory: web
+      run: npm run test:permissions
+    - name: Verify source after Run permission and catalog regressions
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run turn-stream regressions
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Run turn-stream regressions
+      working-directory: web
+      run: npm run test:contexts
+    - name: Verify source after Run turn-stream regressions
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run run-surface regressions
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Run run-surface regressions
+      working-directory: web
+      run: npm run test:sops
+    - name: Verify source after Run run-surface regressions
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run SOP editor regressions
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Run SOP editor regressions
+      working-directory: web
+      run: npm run test:sop-editor
+    - name: Verify source after Run SOP editor regressions
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify source before Run dashboard sign-in regressions
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Run dashboard sign-in regressions
+      working-directory: web
+      run: npm run test:auth
+    - name: Verify source after Run dashboard sign-in regressions
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+  rustdoc:
+    name: Rustdoc (independent exact lint command)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-upstream-ci-20261117'
+    steps:
+    - name: Checkout frozen harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Preserve independent source verifier
+      run: 'test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+
+        cp scripts/ci/12002_ci_verify.py "$RUNNER_TEMP/12002_ci_verify.py"
+
+        cp scripts/ci/12002_ci_verify.json "$RUNNER_TEMP/12002_ci_verify.json"'
+    - name: Checkout exact unchanged contribution
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: ggettert/zeroclaw
+        ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify initial source identity
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" initial
+    - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+        components: clippy
+    - name: Verify independent source before Install system dependencies
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Install system dependencies
+      run: bash scripts/ci/apt_install.sh libudev-dev ripgrep
+    - name: Verify independent source after Install system dependencies
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify independent source before Ensure web/dist placeholder exists
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Ensure web/dist placeholder exists
+      run: mkdir -p web/dist && touch web/dist/.gitkeep
+    - name: Verify independent source after Ensure web/dist placeholder exists
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Verify independent source before Rustdoc warnings gate
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" before
+    - name: Rustdoc warnings gate
+      run: cargo doc --no-deps --workspace --exclude zeroclaw-desktop
+    - name: Verify independent source after Rustdoc warnings gate
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" after
+    - name: Final source verification
+      if: always()
+      run: python3 "$RUNNER_TEMP/12002_ci_verify.py" final

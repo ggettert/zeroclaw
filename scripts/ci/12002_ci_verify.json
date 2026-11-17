@@ -1,0 +1,10 @@
+{
+  "Cargo.toml": "f2c46a9f6c1ada0e863eafbe5c7aff4f4f2671230f826c7be5be18d00be88930",
+  "Cargo.lock": "9ab4a3de612799c163319ae3c021e42341d57b67f47e0380aa0efad2deb893fe",
+  ".cargo/config.toml": "cc7a34a9cc6d4f4b428bec77f21f69fd934eb26bf7dfdb5b445cecf377dfc210",
+  ".github/workflows/ci.yml": "82c70c17056ff6caa43c846f252655762304e7542f28de159d240ee9f9df3866",
+  "scripts/ci/run_clippy.sh": "141f3a4aaab03052a5e5cbbd9eef52f99cfce34298226c5302c0ad02c27aa5d7",
+  "crates/zeroclaw-runtime/src/agent/agent.rs": "e79e3cd67eb6f536bdd41d7edc9066125fe9498c47f0807645d670602aac92d4",
+  "crates/zeroclaw-runtime/src/agent/loop_.rs": "75cffbecd2355e136c40fa4ca8ac4ce8d417cc3f4837b88b368659149c66869f",
+  "crates/zeroclaw-runtime/src/agent/tests.rs": "84aed2fdada40e5f0b8e17e1fec5f6443f37df4bb9e8cdf71da2f063ce3218e2"
+}
