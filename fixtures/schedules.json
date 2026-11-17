@@ -1,0 +1,90 @@
+[
+  {
+    "id": "normal-la",
+    "expr": "0 9 * * *",
+    "zone": "America/Los_Angeles",
+    "from": "2024-01-15T16:00:00Z",
+    "baseline": "2024-01-15T17:00:00Z",
+    "candidate": "2024-01-15T17:00:00Z"
+  },
+  {
+    "id": "exclusive-exact",
+    "expr": "0 9 * * *",
+    "zone": "UTC",
+    "from": "2024-01-15T09:00:00Z",
+    "baseline": "2024-01-16T09:00:00Z",
+    "candidate": "2024-01-16T09:00:00Z"
+  },
+  {
+    "id": "exclusive-subsecond",
+    "expr": "* * * * * *",
+    "zone": "UTC",
+    "from": "2024-01-15T09:00:00.999Z",
+    "baseline": "2024-01-15T09:00:01Z",
+    "candidate": "2024-01-15T09:00:01Z"
+  },
+  {
+    "id": "gap-before-missing-hour",
+    "expr": "30 2 * * *",
+    "zone": "America/Los_Angeles",
+    "from": "2024-03-10T09:00:00Z",
+    "baseline": "2024-03-11T09:30:00Z",
+    "candidate": "2024-03-10T10:00:00Z"
+  },
+  {
+    "id": "fold-before-first",
+    "expr": "30 1 * * *",
+    "zone": "America/Los_Angeles",
+    "from": "2024-11-03T07:00:00Z",
+    "baseline": "2024-11-03T08:30:00Z",
+    "candidate": "2024-11-03T08:30:00Z"
+  },
+  {
+    "id": "fold-recreated-after-first",
+    "expr": "30 1 * * *",
+    "zone": "America/Los_Angeles",
+    "from": "2024-11-03T08:30:00Z",
+    "baseline": "2024-11-04T09:30:00Z",
+    "candidate": "2024-11-04T09:30:00Z"
+  },
+  {
+    "id": "fold-second-half-before-wall-match",
+    "expr": "30 1 * * *",
+    "zone": "America/Los_Angeles",
+    "from": "2024-11-03T09:00:00Z",
+    "baseline": "2024-11-03T08:30:00Z",
+    "candidate": "2024-11-04T09:30:00Z"
+  },
+  {
+    "id": "weekday-normalization",
+    "expr": "0 9 * * 1-5",
+    "zone": "UTC",
+    "from": "2026-02-15T00:00:00Z",
+    "baseline": "2026-02-16T09:00:00Z",
+    "candidate": "2026-02-16T09:00:00Z"
+  },
+  {
+    "id": "sunday-alias-step",
+    "expr": "0 10 * * 0-7/2",
+    "zone": "UTC",
+    "from": "2026-02-16T00:00:00Z",
+    "baseline": "2026-02-17T10:00:00Z",
+    "candidate": "2026-02-17T10:00:00Z"
+  },
+  {
+    "id": "native-weekday",
+    "expr": "0 0 9 * * 1",
+    "zone": "UTC",
+    "from": "2026-02-16T00:00:00Z",
+    "baseline": "2026-02-22T09:00:00Z",
+    "candidate": "2026-02-22T09:00:00Z"
+  },
+  {
+    "id": "year-field",
+    "expr": "0 0 9 1 1 * 2027",
+    "zone": "UTC",
+    "from": "2026-02-16T00:00:00Z",
+    "baseline": "2027-01-01T09:00:00Z",
+    "candidate": "2027-01-01T09:00:00Z"
+  }
+]

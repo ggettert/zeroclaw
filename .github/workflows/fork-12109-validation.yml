@@ -1,0 +1,131 @@
+name: Frozen 12505 chrono feasibility probe
+'on':
+  workflow_dispatch: null
+permissions:
+  contents: read
+concurrency:
+  group: 12505-chrono-probe-20261117
+  cancel-in-progress: false
+jobs:
+  probe:
+    name: Frozen timestamp and scheduler probe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name
+      == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12505-chrono-probe-20261117'
+    steps:
+    - name: Checkout frozen standalone source and harness
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.workflow_sha }}
+        persist-credentials: false
+    - name: Attest initial frozen bytes
+      shell: bash
+      env:
+        EXPECTED_SHA: ${{ github.workflow_sha }}
+      run: 'set -euo pipefail
+
+        mkdir -p evidence
+
+        cat > "$RUNNER_TEMP/12505-frozen.sha256" <<''FROZEN''
+
+        bd77b9f5fd73067511953fbba91ac403ce596f4ea28c28c02fc2b16cf47dca43  Cargo.toml
+
+        0cfb0f7610659f7019bd720acd9a1615211d491297b12939afbae05ddcf5d1f9  README.md
+
+        1003c3cbda37af2c1f19bf1574f080c9f1677c8c12a9a915579206b5de532667  fixtures/schedules.json
+
+        07a6fb59f342b077e50a40254e9c3d3126c59e1b33a57d6250ab1c703add9f51  fixtures/timestamps.json
+
+        62036fb5a0bdadbe71f8285d9376590e0444a6de10d76d3684708f860139ab6a  src/lib.rs
+
+        f36dd33bde6bf93cdc139750a8ff6f74f2ad865dd2920b5f2e332b94738fb482  src/normalization.rs
+
+        6b7b361de1850663b2f3c4d4b659972c99a4a2e69550f25e0c52dad35a50024e  tests/schedules.rs
+
+        048b9b390c8e499511968e530873a35484d384ebddab7c846f26912b857e1e60  tests/timestamps.rs
+
+        374a940f542f5b3ff0f03e6c1c1890487c65a811be46cf17af38f513773f283c  validation/run-hosted.sh
+
+        e75a26d63128cd59f087e2a16bedfb195c1744d507e8209035de414e4dd34441  validation/static-check.py
+
+        FROZEN
+
+        sha256sum -c "$RUNNER_TEMP/12505-frozen.sha256" | tee evidence/source-before.txt
+
+        test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+        git diff --exit-code
+
+        git diff --cached --exit-code
+
+        test "$(git ls-files | wc -l)" -eq 11
+
+        test -z "$(git ls-files --others --exclude-standard -- '':!:evidence/*'')"
+
+        printf ''source_and_harness_sha=%s
+
+        manifest_sha256=7baf9021351e918bdee4e95b9ddeaa0c46bdebcf840298a51e3b642afb30a202
+
+        '' "$EXPECTED_SHA" | tee evidence/identity.txt
+
+        sha256sum .github/workflows/fork-12109-validation.yml | tee evidence/workflow.sha256
+
+        cp .github/workflows/fork-12109-validation.yml "$RUNNER_TEMP/12505-workflow.yml"
+
+        '
+    - name: Install Rust 1.96 on hosted runner only
+      shell: bash
+      run: rustup toolchain install 1.96.0 --profile minimal --no-self-update
+    - name: Compile list and execute the two frozen integration suites once
+      shell: bash
+      run: bash validation/run-hosted.sh
+    - name: Attest unchanged source and harness
+      if: always()
+      shell: bash
+      run: 'set -euo pipefail
+
+        sha256sum -c "$RUNNER_TEMP/12505-frozen.sha256" | tee evidence/source-after.txt
+
+        cmp .github/workflows/fork-12109-validation.yml "$RUNNER_TEMP/12505-workflow.yml"
+
+        git diff --exit-code -- $(cut -c67- "$RUNNER_TEMP/12505-frozen.sha256") .github/workflows/fork-12109-validation.yml
+
+        git diff --cached --exit-code
+
+        if test -f Cargo.lock; then sha256sum Cargo.lock | tee evidence/lock-final.sha256; fi
+
+        '
+    - name: Upload only allowlisted lock and safe evidence
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: 12505-frozen-probe-evidence
+        path: 'Cargo.lock
+
+          evidence/toolchain.txt
+
+          evidence/lock.sha256
+
+          evidence/lock-final.sha256
+
+          evidence/normal-build-tree.txt
+
+          evidence/compile.txt
+
+          evidence/timestamps-list.txt
+
+          evidence/schedules-list.txt
+
+          evidence/tests.txt
+
+          evidence/source-before.txt
+
+          evidence/source-after.txt
+
+          evidence/identity.txt
+
+          evidence/workflow.sha256'
+        if-no-files-found: error
+        retention-days: 1
+        include-hidden-files: false

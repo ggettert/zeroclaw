@@ -1,0 +1,22 @@
+[package]
+name = "chrono-free-feasibility"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[workspace]
+
+[dependencies]
+anyhow = "=1.0.104"
+jiff = { version = "=0.2.46", default-features = false, features = ["std", "tz-system", "tz-fat", "tzdb-bundle-always"] }
+croner = { version = "=4.0.3", default-features = false, features = ["jiff"] }
+
+# Oracle only: never part of the proposed production dependency closure.
+[dev-dependencies]
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std", "serde"] }
+chrono-tz = "=0.10.4"
+cron = "=0.15.0"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
