@@ -11,6 +11,8 @@ for case, expected in manifest.items():
     def git(*args):
         return subprocess.check_output(['git', '-C', str(root), *args], text=True).strip()
     assert git('rev-parse', 'HEAD') == expected['sha'], case + ': source SHA drift'
+    assert git('write-tree') == git('rev-parse', 'HEAD^{tree}'), case + ': index tree drift'
+    print(json.dumps({'case': case, 'tree': git('rev-parse', 'HEAD^{tree}')}))
     assert not git('status', '--porcelain', '--untracked-files=all'), case + ': dirty source'
     # Clean sources intentionally omit generated web assets; gateway build.rs
     # returns before npm, and default features do not enable embedded-web.

@@ -26,6 +26,12 @@ FROM memories m JOIN agents a ON a.id=m.agent_id
 WHERE a.alias='autosaveprobe' AND m.session_id='autosave-same'
 AND (m.key='user_msg' OR m.key GLOB 'user_msg_*') ORDER BY m.created_at,m.key"""
 CONFIG = '''schema_version = 4
+[observability]
+backend = "none"
+log_persistence = "full"
+log_persistence_path = "TRACE_PATH"
+log_tool_io = "off"
+log_llm_request_payload = "off"
 [providers.models.custom.fixture]
 uri = "http://127.0.0.1:PROVIDER_PORT/v1/chat/completions"
 api_key = "local-fixture-not-a-credential"
@@ -248,10 +254,10 @@ def run(case, binary):
             server.requests, server.errors = [], []
             thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.1}, daemon=True)
             thread.start()
-            (config / 'config.toml').write_text(CONFIG.replace('PROVIDER_PORT', str(server.server_port)))
+            (config / 'config.toml').write_text(CONFIG.replace('PROVIDER_PORT', str(server.server_port)).replace('TRACE_PATH', str(root_path / 'runtime.jsonl')))
             env = {'HOME': str(home), 'XDG_CONFIG_HOME': str(home / 'config'),
                    'XDG_DATA_HOME': str(home / 'data'), 'XDG_CACHE_HOME': str(home / 'cache'),
-                   'PATH': '/usr/bin:/bin'}
+                   'PATH': '/usr/bin:/bin', 'RUST_LOG': 'info'}
             private_log = root_path / 'startup.log'
             try:
                 stage = 'gateway_startup'
@@ -289,6 +295,7 @@ def run(case, binary):
                                          {'message': message, 'stream': True})
                     need(media == 'text/event-stream', 'webhook_not_sse')
                     count = events(raw)
+                    capture_attribution(root_path / 'runtime.jsonl', turn)
                     need(len(server.requests) == turn and not server.errors, 'provider_request_evidence')
                     stage = 'sqlite_turn_%d' % turn
                     agent_id, found = rows(config / 'data' / 'memory' / 'brain.db')
@@ -324,7 +331,83 @@ def run(case, binary):
              binary_hash_unchanged=True)
 
 
+def attribution_records(path, turn):
+    # Export only recognized native request events; never arbitrary payloads.
+    need(path.exists() and path.stat().st_size < 8 * 1024 * 1024, 'trace_missing_or_oversize')
+    all_rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    selected = [r for r in all_rows if r.get('message') == 'llm_request' and
+                r.get('event', {}).get('category') == 'provider']
+    need(len(selected) == turn, 'trace_request_count')
+    safe = []
+    for index, r in enumerate(selected, 1):
+        z, a = r.get('zeroclaw', {}), r.get('attributes', {})
+        need(isinstance(z, dict) and isinstance(a, dict), 'trace_schema')
+        allowed = {'surface': {'web', 'tui', 'cli'},
+                   'channel': {'agent', 'webhook', 'cli', 'web'},
+                   'channel_type': {'agent', 'webhook', 'cli', 'web'},
+                   'agent_alias': {'autosaveprobe'},
+                   'model_provider': {'custom', 'custom.fixture'},
+                   'model_provider_type': {'custom'},
+                   'model_provider_alias': {'fixture'}, 'model': {'fixture-model'}}
+        fields = {}
+        for name, values in allowed.items():
+            if name in z:
+                need(z[name] in values, 'unexpected_attribution_value_withheld')
+                fields[name] = z[name]
+        trace = r.get('trace_id')
+        need(isinstance(trace, str) and trace == a.get('trace_id'), 'trace_relation')
+        need(a.get('model') == 'fixture-model', 'trace_model')
+        need(r['event']['action'] == 'send', 'trace_action')
+        safe.append({'request_ordinal': index, 'record_origin': 'native_runtime_jsonl',
+                     'event_category': 'provider', 'event_action': 'send',
+                     'message_selector': 'llm_request', 'zeroclaw': fields,
+                     'surface_present': 'surface' in z, 'channel_present': 'channel' in z,
+                     'trace_id_sha256': hashlib.sha256(trace.encode()).hexdigest(),
+                     'span_id_present': bool(r.get('span_id')),
+                     'relation': 'sequential isolated HTTP request; native trace_id equals attributes.trace_id'})
+    return {'parsed_events': len(all_rows), 'selected_requests': len(selected),
+            'records': safe, 'raw_exported': False,
+            'all_events_with_surface': sum('surface' in r.get('zeroclaw', {}) for r in all_rows),
+            'all_events_with_channel': sum('channel' in r.get('zeroclaw', {}) for r in all_rows),
+            'attribution_status': 'observed' if all(x['surface_present'] and x['channel_present'] for x in safe)
+                                  else 'native_fields_absent_not_inferred'}
+
+
+def capture_attribution(path, turn):
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            report = attribution_records(path, turn)
+            break
+        except (GuardFailure, ValueError):
+            if time.monotonic() >= deadline:
+                raise GuardFailure('native_trace_capture_failed') from None
+            time.sleep(0.1)
+    emit(component='runtime_attribution', turn=turn, **report)
+
+
+def attribution_self_test():
+    with tempfile.TemporaryDirectory() as directory:
+        p = Path(directory) / 'trace.jsonl'
+        row = {'message': 'llm_request', 'event': {'category': 'provider', 'action': 'send'},
+               'zeroclaw': {'model_provider': 'custom.fixture'}, 'trace_id': 'synthetic-id',
+               'attributes': {'trace_id': 'synthetic-id', 'model': 'fixture-model', 'token': 'DO_NOT_EXPORT'}}
+        p.write_text(json.dumps(row))
+        result = attribution_records(p, 1)
+        need(result['attribution_status'] == 'native_fields_absent_not_inferred', 'absence_guard')
+        need('DO_NOT_EXPORT' not in json.dumps(result), 'redaction_guard')
+        row['zeroclaw']['channel'] = 'SECRET_UNEXPECTED'
+        p.write_text(json.dumps(row))
+        try:
+            attribution_records(p, 1)
+        except GuardFailure:
+            pass
+        else:
+            raise GuardFailure('unknown_field_value_not_rejected')
+
+
 def self_test():
+    attribution_self_test()
     need('require_pairing = true' in CONFIG and 'deny_all_tools = true' in CONFIG, 'config_guards')
     # Ubuntu 24.04 has stdlib tomllib; local Python 3.9 guard checks do not.
     try:

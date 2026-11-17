@@ -1,13 +1,4 @@
 {
-  "baseline": {
-    "sha": "69ea0ae1ae6f662ea9952e6247c764289adfe6a2",
-    "files": {
-      "Cargo.lock": "9ab4a3de612799c163319ae3c021e42341d57b67f47e0380aa0efad2deb893fe",
-      "crates/zeroclaw-runtime/src/agent/agent.rs": "3bab3c72e35f8a9c604e286cd9f54ff124e168442a37c4db6ae8ff570f941921",
-      "crates/zeroclaw-runtime/src/agent/loop_.rs": "f249706d26398a8fd5210a62ff8294cbafa6d9164c7abd1f15c38f12ad705a9d",
-      "crates/zeroclaw-runtime/src/agent/tests.rs": "a0a29379856e0e89cfac8252525c58631676cb402fb9573e6fa5e8a30fb47edf"
-    }
-  },
   "fixed": {
     "sha": "a1780d236088e782caaebc0a84dd4c9f19c04d2d",
     "files": {
