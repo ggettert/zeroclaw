@@ -1,4 +1,4 @@
-name: Fork 12002 autosave preservation
+name: Fork 12002 exact PR head seven tests
 
 on:
   workflow_dispatch:
@@ -7,12 +7,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: fork-12002-reproduction
+  group: fork-12002-unit-head
   cancel-in-progress: false
 
 jobs:
   reproduce:
-    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name == 'workflow_dispatch'
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/validation/12002-unit-head-20261117'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
@@ -25,26 +25,39 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_TERM_COLOR: never
       RUSTUP_TOOLCHAIN: 1.98.0
-      UPSTREAM_BASE: 6e83982340297d4682c5399792549ee9e2f275f0
-      FORK_BEFORE_SYNC: e2ea0c8a5ac20c82321fcbdfff26f080c45b0f7d
+      SOURCE_SHA: a1780d236088e782caaebc0a84dd4c9f19c04d2d
     steps:
       - name: Checkout this reviewed workflow revision
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: ggettert/zeroclaw
           ref: ${{ github.workflow_sha }}
+          path: harness
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+      - name: Checkout exact clean PR source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ggettert/zeroclaw
+          ref: a1780d236088e782caaebc0a84dd4c9f19c04d2d
+          path: source
           fetch-depth: 1
           persist-credentials: false
           submodules: false
       - name: Verify source identity and resources
+        working-directory: source
         env:
-          EXPECTED_SHA: ${{ github.workflow_sha }}
+          EXPECTED_HARNESS: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          printf 'source_and_workflow=%s\nupstream_base=%s\nfork_before_sync=%s\n' "$EXPECTED_SHA" "$UPSTREAM_BASE" "$FORK_BEFORE_SYNC"
-          git status --short
-          sha256sum Cargo.lock crates/zeroclaw-runtime/src/agent/{agent.rs,loop_.rs,tests.rs} .github/workflows/fork-12109-validation.yml
+          test "$(git -C "$GITHUB_WORKSPACE/harness" rev-parse HEAD)" = "$EXPECTED_HARNESS"
+          test -z "$(git -C "$GITHUB_WORKSPACE/harness" status --porcelain --untracked-files=all)"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git diff --exit-code HEAD --
+          printf 'source_sha=%s\nharness_sha=%s\nsource_tree=%s\nfeatures=FULL_DEFAULTS\n' "$SOURCE_SHA" "$EXPECTED_HARNESS" "$(git rev-parse HEAD^{tree})"
+          sha256sum "$GITHUB_WORKSPACE/harness/.github/workflows/fork-12109-validation.yml"
           sha256sum --check <<'HASHES'
           9ab4a3de612799c163319ae3c021e42341d57b67f47e0380aa0efad2deb893fe  Cargo.lock
           e79e3cd67eb6f536bdd41d7edc9066125fe9498c47f0807645d670602aac92d4  crates/zeroclaw-runtime/src/agent/agent.rs
@@ -59,13 +72,22 @@ jobs:
           toolchain: 1.98.0
           components: rustfmt
       - name: Toolchain and changed-file formatting
+        working-directory: source
         run: |
           set -euo pipefail
           rustc --version; cargo --version; rustfmt --version
           rustfmt --edition 2024 --check --config skip_children=true crates/zeroclaw-runtime/src/agent/{agent.rs,loop_.rs,tests.rs}
       - name: Compile default-feature runtime library harness
-        run: cargo test --locked -p zeroclaw-runtime --lib --no-run
+        working-directory: source
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/12002-unit-head-target"
+          test ! -e "$CARGO_TARGET_DIR"
+          printf 'CARGO_TARGET_DIR=%s\n' "$CARGO_TARGET_DIR" >> "$GITHUB_ENV"
+          printf 'fresh_cargo_target=%s\n' "$CARGO_TARGET_DIR"
+          cargo test --locked -p zeroclaw-runtime --lib --no-run
       - name: Discover and run all seven exact tests
+        working-directory: source
         run: |
           set -euo pipefail
           tests=(
@@ -94,6 +116,21 @@ jobs:
             grep -Fx 'running 1 test' "$RUNNER_TEMP/test-result.log" || result=1
           done
           exit "$result"
+      - name: Final pristine source attestation
+        if: always()
+        working-directory: source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git diff --exit-code HEAD --
+          printf 'final_source_sha=%s\nfinal_source_tree=%s\n' "$SOURCE_SHA" "$(git rev-parse HEAD^{tree})"
+          sha256sum --check <<'HASHES'
+          9ab4a3de612799c163319ae3c021e42341d57b67f47e0380aa0efad2deb893fe  Cargo.lock
+          e79e3cd67eb6f536bdd41d7edc9066125fe9498c47f0807645d670602aac92d4  crates/zeroclaw-runtime/src/agent/agent.rs
+          75cffbecd2355e136c40fa4ca8ac4ce8d417cc3f4837b88b368659149c66869f  crates/zeroclaw-runtime/src/agent/loop_.rs
+          84aed2fdada40e5f0b8e17e1fec5f6443f37df4bb9e8cdf71da2f063ce3218e2  crates/zeroclaw-runtime/src/agent/tests.rs
+          HASHES
       - name: Final resource diagnostics
         if: always()
         run: df -h; free -h
