@@ -7,7 +7,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parent.parent
 for name, required, count in [
     ("timestamps", {"id", "input", "persisted", "serde", "log"}, 8),
-    ("schedules", {"id", "expr", "zone", "from", "baseline", "candidate"}, 11),
+    ("schedules", {"id", "expr", "zone", "from", "baseline", "candidate", "raw_candidate"}, 23),
 ]:
     rows = json.loads((root / "fixtures" / (name + ".json")).read_text())
     assert len(rows) == count
@@ -27,7 +27,7 @@ for path in sorted(root.rglob("*")):
         assert data.endswith(b"\n"), str(path)
         assert all(line.rstrip() == line for line in data.splitlines()), str(path)
 print("Text structure: no NUL, trailing whitespace or missing final newline")
-for name, count in [("timestamps", 5), ("schedules", 6)]:
+for name, count in [("timestamps", 5), ("schedules", 9)]:
     actual = (root / "tests" / (name + ".rs")).read_text().count("#[test]")
     assert actual == count, (name, actual)
     print(name + ": " + str(count) + " authored tests (NOT executed)")

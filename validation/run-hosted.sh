@@ -23,5 +23,5 @@ cargo +1.96.0 test --locked --test timestamps --test schedules --no-run 2>&1 | t
 cargo +1.96.0 test --locked --test timestamps -- --list 2>&1 | tee evidence/timestamps-list.txt
 cargo +1.96.0 test --locked --test schedules -- --list 2>&1 | tee evidence/schedules-list.txt
 test "$(grep -c ': test$' evidence/timestamps-list.txt)" -eq 5
-test "$(grep -c ': test$' evidence/schedules-list.txt)" -eq 6
+test "$(grep -c ': test$' evidence/schedules-list.txt)" -eq 9
 cargo +1.96.0 test --locked --test timestamps --test schedules -- --nocapture --test-threads=1 2>&1 | tee evidence/tests.txt

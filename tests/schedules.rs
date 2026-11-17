@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use chrono_free_feasibility::{
     candidate_next, localized, normalization::normalize_expression, parse_persisted,
-    serde_timestamp,
+    raw_candidate_next, serde_timestamp,
 };
 use serde::Deserialize;
 use std::str::FromStr;
@@ -14,6 +14,7 @@ struct Case {
     from: String,
     baseline: String,
     candidate: String,
+    raw_candidate: String,
 }
 fn cases() -> Vec<Case> {
     serde_json::from_str(include_str!("../fixtures/schedules.json")).unwrap()
@@ -39,6 +40,14 @@ fn characterize_application_one_shot_scheduler_and_candidate() {
     for c in cases() {
         let old = old_next(&c.expr, &c.zone, &c.from);
         assert_eq!(old, utc(&c.baseline), "source-derived baseline {}", c.id);
+        let raw =
+            raw_candidate_next(&c.expr, Some(&c.zone), parse_persisted(&c.from).unwrap()).unwrap();
+        assert_eq!(
+            raw,
+            parse_persisted(&c.raw_candidate).unwrap(),
+            "raw Croner {}",
+            c.id
+        );
         let new =
             candidate_next(&c.expr, Some(&c.zone), parse_persisted(&c.from).unwrap()).unwrap();
         assert_eq!(
@@ -48,9 +57,10 @@ fn characterize_application_one_shot_scheduler_and_candidate() {
             c.id
         );
         eprintln!(
-            "{}: old={} candidate={} compatible={}",
+            "{}: old={} raw={} candidate={} compatible={}",
             c.id,
             old,
+            raw,
             new,
             c.baseline == c.candidate
         );
@@ -59,6 +69,68 @@ fn characterize_application_one_shot_scheduler_and_candidate() {
             assert_eq!(serde_timestamp(new), c.baseline);
         }
     }
+}
+
+#[test]
+fn spring_gap_matches_old_oracle_without_discarding_valid_times() {
+    let rows: Vec<_> = cases()
+        .into_iter()
+        .filter(|c| c.id.starts_with("gap-"))
+        .collect();
+    assert_eq!(rows.len(), 13);
+    let mut shifted = 0;
+    for c in rows {
+        let from = parse_persisted(&c.from).unwrap();
+        let old = old_next(&c.expr, &c.zone, &c.from);
+        let new = candidate_next(&c.expr, Some(&c.zone), from).unwrap();
+        // Acceptance comes from the real old oracle, not agreement between goldens.
+        assert_eq!(new, parse_persisted(&old.to_rfc3339()).unwrap(), "{}", c.id);
+        assert!(new > from, "exclusive-after {}", c.id);
+        let raw = raw_candidate_next(&c.expr, Some(&c.zone), from).unwrap();
+        if c.raw_candidate != c.baseline {
+            shifted += 1;
+            assert_ne!(raw, new, "raw mismatch remains visible {}", c.id);
+        } else {
+            assert_eq!(raw, new, "valid occurrence retained {}", c.id);
+        }
+    }
+    assert_eq!(shifted, 4);
+}
+
+#[test]
+fn gap_only_year_exhaustion_is_error_not_shifted_execution() {
+    let expr = "0 30 2 10 3 * 2024";
+    let from = "2024-03-10T09:00:00Z";
+    let tz = chrono_tz::America::Los_Angeles;
+    let schedule = cron::Schedule::from_str(expr).unwrap();
+    assert!(
+        schedule
+            .after(&utc(from).with_timezone(&tz))
+            .next()
+            .is_none()
+    );
+    let ts = parse_persisted(from).unwrap();
+    assert_eq!(
+        raw_candidate_next(expr, Some("America/Los_Angeles"), ts).unwrap(),
+        parse_persisted("2024-03-10T10:00:00Z").unwrap()
+    );
+    assert!(candidate_next(expr, Some("America/Los_Angeles"), ts).is_err());
+}
+
+#[test]
+fn fold_past_oracle_result_is_characterized_not_reproduced() {
+    let expr = "30 1 * * *";
+    let zone = "America/Los_Angeles";
+    let from = "2024-11-03T09:00:00Z";
+    let old = old_next(expr, zone, from);
+    assert_eq!(old, utc("2024-11-03T08:30:00Z"));
+    assert!(old < utc(from));
+    let ts = parse_persisted(from).unwrap();
+    let raw = raw_candidate_next(expr, Some(zone), ts).unwrap();
+    let adapted = candidate_next(expr, Some(zone), ts).unwrap();
+    assert_eq!(adapted, raw);
+    assert_eq!(adapted, parse_persisted("2024-11-04T09:30:00Z").unwrap());
+    assert!(adapted > ts);
 }
 
 #[test]

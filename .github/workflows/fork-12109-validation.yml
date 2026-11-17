@@ -31,23 +31,23 @@ jobs:
 
         bd77b9f5fd73067511953fbba91ac403ce596f4ea28c28c02fc2b16cf47dca43  Cargo.toml
 
-        0cfb0f7610659f7019bd720acd9a1615211d491297b12939afbae05ddcf5d1f9  README.md
+        8d3499c26b91639d1f5afa3c13bb345194aeacbcf6e3e0981013f297ee887d81  README.md
 
-        1003c3cbda37af2c1f19bf1574f080c9f1677c8c12a9a915579206b5de532667  fixtures/schedules.json
+        613e02392ebd832d5f2f01b6ea60aa8dcee4be9b57840fde73f29a0a1d064707  fixtures/schedules.json
 
         07a6fb59f342b077e50a40254e9c3d3126c59e1b33a57d6250ab1c703add9f51  fixtures/timestamps.json
 
-        62036fb5a0bdadbe71f8285d9376590e0444a6de10d76d3684708f860139ab6a  src/lib.rs
+        f04de7aa3a9206f267f0ad0815d91d6868a92f9f50b7138d397f7fa95031efd6  src/lib.rs
 
         f36dd33bde6bf93cdc139750a8ff6f74f2ad865dd2920b5f2e332b94738fb482  src/normalization.rs
 
-        6b7b361de1850663b2f3c4d4b659972c99a4a2e69550f25e0c52dad35a50024e  tests/schedules.rs
+        e4b79c89dc87eaf6fba1e7b7451bf693c8277be88fa840a8927897e95cda61d1  tests/schedules.rs
 
         048b9b390c8e499511968e530873a35484d384ebddab7c846f26912b857e1e60  tests/timestamps.rs
 
-        374a940f542f5b3ff0f03e6c1c1890487c65a811be46cf17af38f513773f283c  validation/run-hosted.sh
+        951671b1ba554512a6335363d6b33b720d94062a9fd731ca0800c56b86abcfd6  validation/run-hosted.sh
 
-        e75a26d63128cd59f087e2a16bedfb195c1744d507e8209035de414e4dd34441  validation/static-check.py
+        b7a2d94db7efb0d2131a6953650e89ab8aae9faba95eac3c56316d3ebb9b2dfb  validation/static-check.py
 
         FROZEN
 
@@ -55,17 +55,31 @@ jobs:
 
         test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
+        echo ''206d0d740e20868e85b6986175c8fafe6bd990466f5c56ae773f55b0ee8ea56e  Cargo.lock'' | sha256sum -c -
+
         git diff --exit-code
 
         git diff --cached --exit-code
 
-        test "$(git ls-files | wc -l)" -eq 11
+        test "$(git ls-files | wc -l)" -eq 12
 
         test -z "$(git ls-files --others --exclude-standard -- '':!:evidence/*'')"
 
         printf ''source_and_harness_sha=%s
 
-        manifest_sha256=7baf9021351e918bdee4e95b9ddeaa0c46bdebcf840298a51e3b642afb30a202
+        manifest_sha256=e001b8b6f636b1012ff4b363ec45aa325020726ab5be5f8d2a18b8972d262953
+
+        expected_tests=14
+
+        scheduler_tests=9
+
+        timestamp_tests=5
+
+        schedule_fixtures=23
+
+        lock_sha256=206d0d740e20868e85b6986175c8fafe6bd990466f5c56ae773f55b0ee8ea56e
+
+        lock_role=separately-attested-original-hosted-lock-not-in-ten-source-manifest
 
         '' "$EXPECTED_SHA" | tee evidence/identity.txt
 
@@ -89,7 +103,10 @@ jobs:
 
         cmp .github/workflows/fork-12109-validation.yml "$RUNNER_TEMP/12505-workflow.yml"
 
+        echo ''206d0d740e20868e85b6986175c8fafe6bd990466f5c56ae773f55b0ee8ea56e  Cargo.lock'' | sha256sum -c -
+
         git diff --exit-code -- $(cut -c67- "$RUNNER_TEMP/12505-frozen.sha256") .github/workflows/fork-12109-validation.yml
+        Cargo.lock
 
         git diff --cached --exit-code
 

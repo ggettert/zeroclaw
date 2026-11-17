@@ -3,7 +3,8 @@
 Standalone experimental library and differential tests against ZeroClaw revision
 cda933e6b9937deacbcc0d4d2cd7f1ae5bb4500e. Not a workspace migration or production
 API. Jiff 0.2.46 handles timestamp/timezone boundaries; Croner 4.0.3 with its Jiff
-backend is a raw scheduler comparison, NOT a drop-in compatibility claim.
+backend skips shifted nonmatching spring-gap results; raw Croner remains available
+for comparison. This is NOT a drop-in compatibility claim.
 
 ## Run on an approved isolated Rust 1.96 runner
 
@@ -28,8 +29,16 @@ transitive versions are not frozen until then.
 - Scheduler fixtures characterize both the old result and candidate result.
   Some are intentionally different. A green characterization suite is NOT a
   green migration acceptance suite.
-- Source indicates fixed-time DST gaps differ. Old one-shot scheduler discards
-  cron iterator fold state; a second-half query can even return an earlier instant.
+- The adapted candidate skips nonexistent fixed-time spring occurrences using
+  Croner's complete wall-time match predicate, then resumes from the rejected
+  transition instant. It retains valid boundary/wildcard and later same-day runs.
+  The raw probe still demonstrates Croner's shifted-first-valid behavior.
+- Fall-back behavior is deliberately unchanged. The old one-shot scheduler
+  discards cron iterator fold state; a second-half query can return an earlier
+  instant. The candidate does not reproduce that past-time result.
+- 23 schedule fixture rows plus exhaustion/fold tests use the real old oracle;
+  LA one-hour and Lord Howe half-hour transitions are covered. Library search
+  limits still propagate as errors; this wrapper adds no search horizon or scan.
 - No bespoke cron engine, public production signature change, or database migration.
 - Leap seconds, extended years, broader parser forms, full cron grammar rejection,
   platform-local fallback and actual database integration remain outside this slice.

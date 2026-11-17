@@ -102,9 +102,7 @@ pub fn localized(ts: Timestamp, name: Option<&str>) -> Result<Zoned> {
     Ok(ts.to_zoned(zone))
 }
 
-/// Raw candidate probe. Fixed-time DST gaps/folds differ from cron 0.15;
-/// callers MUST NOT interpret this as a compatibility-approved replacement.
-pub fn candidate_next(expr: &str, zone: Option<&str>, from: Timestamp) -> Result<Timestamp> {
+fn candidate_cron(expr: &str) -> Result<croner::Cron> {
     let normalized = normalization::normalize_expression(expr)?;
     let cron = CronParser::builder()
         .seconds(Seconds::Required)
@@ -115,8 +113,39 @@ pub fn candidate_next(expr: &str, zone: Option<&str>, from: Timestamp) -> Result
         .build()
         .parse(&normalized)
         .context("candidate cron parse")?;
-    let next = cron.find_next_occurrence(&localized(from, zone)?, false)?;
-    Ok(next.timestamp())
+    Ok(cron)
+}
+
+/// Unadapted Croner comparison, retained to demonstrate the spring-gap mismatch.
+pub fn raw_candidate_next(expr: &str, zone: Option<&str>, from: Timestamp) -> Result<Timestamp> {
+    let cron = candidate_cron(expr)?;
+    Ok(cron
+        .find_next_occurrence(&localized(from, zone)?, false)?
+        .timestamp())
+}
+
+/// Skip nonexistent wall-time occurrences, as cron 0.15 does. Croner fold
+/// semantics are deliberately retained; this is not a full compatibility claim.
+pub fn candidate_next(expr: &str, zone: Option<&str>, from: Timestamp) -> Result<Timestamp> {
+    let cron = candidate_cron(expr)?;
+    let mut cursor = localized(from, zone)?;
+    loop {
+        let next = cron.find_next_occurrence(&cursor, false)?;
+        if cron.is_time_matching(&next)? {
+            return Ok(next.timestamp());
+        }
+        // Croner 4.0.3 can return a nonmatching wall time only when it carries a
+        // fixed-time occurrence across a gap to its first real instant. Reject
+        // that synthetic occurrence, not the entire transition day. A genuine
+        // boundary match (e.g. 03:00) is accepted above, including wildcard jobs.
+        // Resume exclusively at the rejected instant: no real scheduled time
+        // lies in the gap, and the boundary itself did not match. No date/offset
+        // assumptions, scanning, or arbitrary retry budget are needed.
+        if next.timestamp() <= cursor.timestamp() {
+            bail!("candidate gap search did not advance");
+        }
+        cursor = next;
+    }
 }
 
 /// Elapsed Every semantics, not calendar arithmetic. Original At simply returns
