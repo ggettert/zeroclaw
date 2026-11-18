@@ -279,7 +279,7 @@ pub async fn render_memory_context(
     let query_summary = make_query_summary(user_msg);
 
     // Over-fetch a larger candidate pool only when reranking is enabled;
-    // otherwise recall exactly `limit` so the default path is unchanged.
+    // otherwise recall exactly `limit` prompt candidates, not archive rows.
     let recall_limit = if cfg.rerank_enabled {
         let requested_pool = cfg
             .limit
@@ -303,7 +303,7 @@ pub async fn render_memory_context(
     };
     for session_id in scopes {
         match mem
-            .recall(user_msg, recall_limit, *session_id, None, None)
+            .recall_for_prompt(user_msg, recall_limit, *session_id)
             .await
         {
             Ok(recalled) => {
@@ -1226,6 +1226,179 @@ mod tests {
             &[(1, true), (1, true)],
             "both renders emit a MemoryRecall event"
         );
+    }
+
+    /// Real SQLite, its production decorators, and the default rerank-off
+    /// renderer: generic recall remains archival; prompt slots belong to facts.
+    #[tokio::test]
+    async fn sqlite_autosaves_do_not_crowd_out_prompt_facts() {
+        use std::sync::Arc;
+        use zeroclaw_memory::{
+            AgentScopedMemory, AuditedMemory, RetrievalConfig, RetrievalPipeline, ScannedMemory,
+            SqliteMemory,
+        };
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sqlite = SqliteMemory::new("prompt-regression", tmp.path()).unwrap();
+        let own = sqlite.ensure_agent_uuid("own").await.unwrap();
+        let other = sqlite.ensure_agent_uuid("other").await.unwrap();
+        let scanned = ScannedMemory::new(
+            sqlite,
+            &zeroclaw_config::schema::MemoryPolicyConfig::default(),
+        );
+        let audited = AuditedMemory::new(scanned, tmp.path()).unwrap();
+        let storage: Arc<dyn Memory> = Arc::new(audited);
+        let scoped: Arc<dyn Memory> = Arc::new(AgentScopedMemory::new(
+            storage.clone(),
+            own,
+            Vec::<String>::new(),
+        ));
+        let memory = RetrievalPipeline::new(
+            scoped,
+            RetrievalConfig {
+                cache_enabled: true,
+                ..RetrievalConfig::default()
+            },
+        );
+        let cfg = MemoryInjectConfig::default();
+        assert!(!cfg.rerank_enabled);
+        assert_eq!(cfg.limit, 5);
+        let session = Some("prompt-session");
+        let fact = format!("orchid prefers shade {}", "garden details ".repeat(80));
+        memory
+            .store("plant_fact", &fact, MemoryCategory::Core, session)
+            .await
+            .unwrap();
+        let mut keys = Vec::new();
+        // More than both the renderer limit and SQLite's FTS candidate limit.
+        for _ in 0..12 {
+            let key = format!("user_msg_{}", uuid::Uuid::new_v4());
+            memory
+                .store(
+                    &key,
+                    "orchid orchid orchid",
+                    MemoryCategory::Conversation,
+                    session,
+                )
+                .await
+                .unwrap();
+            keys.push(key);
+        }
+        memory
+            .store(
+                "other_session_fact",
+                "orchid secret session",
+                MemoryCategory::Core,
+                Some("other-session"),
+            )
+            .await
+            .unwrap();
+        storage
+            .store_with_agent(
+                "other_agent_fact",
+                "orchid secret agent",
+                MemoryCategory::Core,
+                session,
+                None,
+                None,
+                Some(&other),
+            )
+            .await
+            .unwrap();
+
+        // Prime the generic cache with genuinely crowded results. This is not
+        // a fixture that assumes insertion order is the backend's ranking.
+        let crowded = Memory::recall(&memory, "orchid", cfg.limit, session, None, None)
+            .await
+            .unwrap();
+        assert_eq!(crowded.len(), cfg.limit);
+        assert!(
+            crowded
+                .iter()
+                .all(|e| zeroclaw_memory::is_user_autosave_key(&e.key))
+        );
+        let all = Memory::recall(&memory, "orchid", 32, session, None, None)
+            .await
+            .unwrap();
+        let fact_score = all
+            .iter()
+            .find(|e| e.key == "plant_fact")
+            .unwrap()
+            .score
+            .unwrap();
+        assert_eq!(
+            all.iter()
+                .filter(|e| zeroclaw_memory::is_user_autosave_key(&e.key)
+                    && e.score.unwrap() > fact_score)
+                .count(),
+            12
+        );
+
+        assert!(
+            memory
+                .recall_for_prompt_for_agents(&[&other], "orchid", cfg.limit, session)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let recent = memory
+            .recall_for_prompt("*", cfg.limit, session)
+            .await
+            .unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].key, "plant_fact");
+        let private = zeroclaw_memory::PrincipalPlaneMemory::new(
+            storage.clone(),
+            zeroclaw_api::memory_traits::PrincipalScope::new("private-owner"),
+        );
+        assert!(
+            private
+                .recall_for_prompt("orchid", cfg.limit, session)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let observer = RecordingObserver::default();
+        for _ in 0..2 {
+            let context = render_memory_context(
+                &memory,
+                &observer,
+                "orchid",
+                &[session],
+                &cfg,
+                false,
+                TurnMeta {
+                    parent_agent_alias: None,
+                    agent_alias: Some("own"),
+                    turn_id: "prompt-test",
+                    channel_name: "test",
+                },
+            )
+            .await;
+            assert!(
+                context.contains("plant_fact: orchid prefers shade"),
+                "{context}"
+            );
+            assert!(!context.contains("user_msg"));
+            assert!(!context.contains("orchid orchid orchid"));
+            assert!(!context.contains("other_session_fact"));
+            assert!(!context.contains("other_agent_fact"));
+        }
+        assert_eq!(
+            Memory::recall(&memory, "orchid", cfg.limit, session, None, None)
+                .await
+                .unwrap()
+                .iter()
+                .map(|e| &e.key)
+                .collect::<Vec<_>>(),
+            crowded.iter().map(|e| &e.key).collect::<Vec<_>>()
+        );
+        for key in keys {
+            let saved = memory.get(&key).await.unwrap().unwrap();
+            assert_eq!(saved.content, "orchid orchid orchid");
+            assert_eq!(saved.session_id.as_deref(), session);
+        }
     }
 
     // -- rerank stage + injection goldens --------------------------------
