@@ -1,0 +1,57 @@
+name: Frozen 12508 prompt recall bounded validation
+'on':
+  workflow_dispatch: null
+permissions:
+  contents: read
+concurrency:
+  group: 12508-prompt-20261118
+  cancel-in-progress: false
+jobs:
+  focused:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.ref == 'refs/heads/validation/12508-prompt-20261118'
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+    - name: Checkout exact corrected source
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: 86c1c96da671e138c20652ae8bc9b24306611a3e
+        persist-credentials: false
+    - name: Verify frozen source
+      run: 'test "$(git rev-parse HEAD)" = "86c1c96da671e138c20652ae8bc9b24306611a3e"
+
+        test -z "$(git status --porcelain)"'
+    - name: Rust toolchain
+      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.98.0
+        components: rustfmt, clippy
+    - name: Build prerequisites
+      run: 'sudo apt-get update -qq
+
+        sudo apt-get install -y --no-install-recommends libudev-dev libasound2-dev pkg-config
+
+        mkdir -p web/dist && touch web/dist/.gitkeep'
+    - name: Formatting
+      id: fmt
+      run: cargo fmt --all -- --check
+    - name: Scoped Clippy
+      id: clippy
+      if: '!cancelled() && steps.fmt.outcome == ''success'''
+      run: cargo clippy --locked -p zeroclaw-api -p zeroclaw-memory -p zeroclaw-runtime --lib --tests -- -D warnings
+    - name: Focused SQLite production regression
+      id: regression
+      if: '!cancelled() && steps.fmt.outcome == ''success'''
+      run: cargo test --locked -p zeroclaw-runtime --lib agent::memory_inject::tests::sqlite_autosaves_do_not_crowd_out_prompt_facts
+        -- --exact
+    - name: Verify source unchanged
+      if: always()
+      run: 'test "$(git rev-parse HEAD)" = "86c1c96da671e138c20652ae8bc9b24306611a3e"
+
+        git diff --exit-code HEAD'
