@@ -199,6 +199,18 @@ impl Memory for AgentScopedMemory {
             .await
     }
 
+    async fn recall_for_prompt_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+    ) -> Result<Vec<MemoryEntry>> {
+        self.inner
+            .recall_for_prompt_for_principal(scope, query, limit, session_id)
+            .await
+    }
+
     async fn recall_for_principal(
         &self,
         scope: &PrincipalScope,

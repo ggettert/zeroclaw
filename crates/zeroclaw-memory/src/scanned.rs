@@ -398,6 +398,25 @@ impl<M: Memory> Memory for ScannedMemory<M> {
             .await
     }
 
+    async fn recall_for_prompt_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        let entries = self
+            .inner
+            .recall_for_prompt_for_principal(
+                scope,
+                query,
+                Self::read_fetch_limit(limit),
+                session_id,
+            )
+            .await?;
+        self.filter_recalled_limited(entries, limit)
+    }
+
     async fn recall_for_principal(
         &self,
         scope: &PrincipalScope,

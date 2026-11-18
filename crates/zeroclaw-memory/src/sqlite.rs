@@ -704,9 +704,13 @@ impl SqliteMemory {
     /// Match is_user_autosave_key before any SQL limit. GLOB's underscore
     /// is literal (unlike LIKE); no schema marker or archive-wide refill is needed.
     fn prompt_key_filter(prefix: &str) -> String {
+        Self::prompt_key_expression_filter(&format!("{prefix}key"))
+    }
+
+    fn prompt_key_expression_filter(expression: &str) -> String {
         // Rust str::trim uses Unicode White_Space; SQLite trim defaults to ASCII space.
         let key = format!(
-            "lower(trim({prefix}key, char(9,10,11,12,13,32,133,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288)))"
+            "lower(trim({expression}, char(9,10,11,12,13,32,133,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288)))"
         );
         format!(" AND {key} != 'user_msg' AND {key} NOT GLOB 'user_msg_*'")
     }
@@ -1441,6 +1445,91 @@ impl SqliteMemory {
         .await?
     }
 
+    async fn recall_principal_scoped(
+        &self,
+        scope: &PrincipalScope,
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+        window: (Option<&str>, Option<&str>),
+        prompt_only: bool,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        let (since, until) = window;
+        let conn = self.conn.clone();
+        let scope = scope.clone();
+        let query = query.to_string();
+        let sid = session_id.map(String::from);
+        let since_owned = since.map(String::from);
+        let until_owned = until.map(String::from);
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<MemoryEntry>> {
+            let conn = conn.lock();
+            // Keyword/time recall over the private plane only. The
+            // embedding/rerank pipeline stays on the shared plane. Prompt reads
+            // exclude private autosaves before the same scoped recent limit.
+            let (scope_sql, mut param_values) = Self::scope_predicate(&scope, "m.", 1);
+            let mut sql = format!(
+                "SELECT {} FROM memories m LEFT JOIN agents a ON a.id = m.agent_id \
+                 WHERE m.superseded_by IS NULL{scope_sql}",
+                Self::PRIVATE_COLUMNS
+            );
+            let mut idx = param_values.len() + 1;
+            if prompt_only {
+                // private_row exposes keys with this exact scope prefix removed.
+                // SQLite substr counts characters, not UTF-8 bytes.
+                let prefix = Self::principal_physical_prefix(&scope);
+                let prefix_len = prefix.chars().count();
+                let visible_key = format!("CASE WHEN substr(m.key, 1, {prefix_len}) = ?{idx} THEN substr(m.key, {}) ELSE m.key END", prefix_len + 1);
+                sql.push_str(&Self::prompt_key_expression_filter(&visible_key));
+                param_values.push(Box::new(prefix));
+                idx += 1;
+            }
+
+            let trimmed = query.trim();
+            if !(trimmed.is_empty() || trimmed == "*") {
+                let _ = write!(sql, " AND m.content LIKE ?{idx} ESCAPE '\\'");
+                let escaped = trimmed
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_");
+                param_values.push(Box::new(format!("%{escaped}%")));
+                idx += 1;
+            }
+            if let Some(sid) = sid.as_deref() {
+                let _ = write!(sql, " AND m.session_id = ?{idx}");
+                param_values.push(Box::new(sid.to_string()));
+                idx += 1;
+            }
+            if let Some(since) = since_owned.as_deref() {
+                let _ = write!(sql, " AND m.created_at >= ?{idx}");
+                param_values.push(Box::new(since.to_string()));
+                idx += 1;
+            }
+            if let Some(until) = until_owned.as_deref() {
+                let _ = write!(sql, " AND m.created_at <= ?{idx}");
+                param_values.push(Box::new(until.to_string()));
+                idx += 1;
+            }
+            let _ = write!(sql, " ORDER BY m.updated_at DESC LIMIT ?{idx}");
+            #[allow(clippy::cast_possible_wrap)]
+            param_values.push(Box::new(limit as i64));
+
+            let mut stmt = conn.prepare(&sql)?;
+            let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values
+                .iter()
+                .map(std::convert::AsRef::as_ref)
+                .collect();
+            let rows =
+                stmt.query_map(params_ref.as_slice(), |row| Self::private_row(row, &scope))?;
+            let mut results = Vec::new();
+            for row in rows {
+                results.push(row?);
+            }
+            Ok(results)
+        })
+        .await?
+    }
+
     /// Replace the live embedder in place. Shared by the runtime
     /// `refresh_embedder` hook (after a `config/set` provider-profile change)
     /// and tests that need to inject a fake embedder. Existing `Arc<dyn Memory>`
@@ -1970,68 +2059,19 @@ impl Memory for SqliteMemory {
         since: Option<&str>,
         until: Option<&str>,
     ) -> anyhow::Result<Vec<MemoryEntry>> {
-        let conn = self.conn.clone();
-        let scope = scope.clone();
-        let query = query.to_string();
-        let sid = session_id.map(String::from);
-        let since_owned = since.map(String::from);
-        let until_owned = until.map(String::from);
+        self.recall_principal_scoped(scope, query, limit, session_id, (since, until), false)
+            .await
+    }
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<MemoryEntry>> {
-            let conn = conn.lock();
-            // Keyword/time recall over the private plane only. The
-            // embedding/rerank pipeline stays on the shared plane; private
-            // rows are operator-curated notes reached over RPC.
-            let (scope_sql, mut param_values) = Self::scope_predicate(&scope, "m.", 1);
-            let mut sql = format!(
-                "SELECT {} FROM memories m LEFT JOIN agents a ON a.id = m.agent_id \
-                 WHERE m.superseded_by IS NULL{scope_sql}",
-                Self::PRIVATE_COLUMNS
-            );
-            let mut idx = param_values.len() + 1;
-            let trimmed = query.trim();
-            if !(trimmed.is_empty() || trimmed == "*") {
-                let _ = write!(sql, " AND m.content LIKE ?{idx} ESCAPE '\\'");
-                let escaped = trimmed
-                    .replace('\\', "\\\\")
-                    .replace('%', "\\%")
-                    .replace('_', "\\_");
-                param_values.push(Box::new(format!("%{escaped}%")));
-                idx += 1;
-            }
-            if let Some(sid) = sid.as_deref() {
-                let _ = write!(sql, " AND m.session_id = ?{idx}");
-                param_values.push(Box::new(sid.to_string()));
-                idx += 1;
-            }
-            if let Some(since) = since_owned.as_deref() {
-                let _ = write!(sql, " AND m.created_at >= ?{idx}");
-                param_values.push(Box::new(since.to_string()));
-                idx += 1;
-            }
-            if let Some(until) = until_owned.as_deref() {
-                let _ = write!(sql, " AND m.created_at <= ?{idx}");
-                param_values.push(Box::new(until.to_string()));
-                idx += 1;
-            }
-            let _ = write!(sql, " ORDER BY m.updated_at DESC LIMIT ?{idx}");
-            #[allow(clippy::cast_possible_wrap)]
-            param_values.push(Box::new(limit as i64));
-
-            let mut stmt = conn.prepare(&sql)?;
-            let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values
-                .iter()
-                .map(std::convert::AsRef::as_ref)
-                .collect();
-            let rows =
-                stmt.query_map(params_ref.as_slice(), |row| Self::private_row(row, &scope))?;
-            let mut results = Vec::new();
-            for row in rows {
-                results.push(row?);
-            }
-            Ok(results)
-        })
-        .await?
+    async fn recall_for_prompt_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        self.recall_principal_scoped(scope, query, limit, session_id, (None, None), true)
+            .await
     }
 
     async fn list_for_principal(

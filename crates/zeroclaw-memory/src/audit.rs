@@ -311,6 +311,25 @@ impl<M: Memory> Memory for AuditedMemory<M> {
             .await
     }
 
+    async fn recall_for_prompt_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        self.log_audit(
+            AuditOp::Recall,
+            None,
+            None,
+            session_id,
+            Some(&format!("{} query={query}", Self::scope_detail(scope))),
+        );
+        self.inner
+            .recall_for_prompt_for_principal(scope, query, limit, session_id)
+            .await
+    }
+
     async fn recall_for_principal(
         &self,
         scope: &PrincipalScope,
