@@ -35,7 +35,11 @@ jobs:
     steps:
       - name: Keep checkout bytes controlled
         shell: bash
-        run: git config --global core.autocrlf false
+        run: |
+          git config --global core.autocrlf false
+          # text=auto without an explicit eol would otherwise use native CRLF on Windows.
+          # Explicit attributes (including eol=crlf for PowerShell) still take precedence.
+          git config --global core.eol lf
       - name: Trusted harness
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:

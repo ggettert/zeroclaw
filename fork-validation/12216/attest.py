@@ -8,6 +8,7 @@ BASE = 'f1f577c85348acce58a7d98b7462394043757a4d'
 TARGET = '42247c1b771196c9dc66ab32ce879241e317d888'
 PATCH = 'ccae5adcbd34d18cc2525846672911a760fe4f4c5434665951f4b0733aa700fe'
 MANIFEST = 'dfbfa70f7caefff7b4dd35cf85826bf6dc8fc783e1fdc8aa8accc6e38816fe2d'
+LOCK = '6fc8a5e9de0fd29a3cff892f17cb7d377728ebfc05522248eb2750c01bd54119'
 HERE = Path(__file__).resolve().parent
 
 def require(ok, msg):
@@ -41,8 +42,18 @@ def attest(initial):
     git('diff','--exit-code','--cached',BASE)
     git('diff','--exit-code',TARGET,'--')
     require(not git('ls-files','--others','--exclude-standard'), 'unexpected untracked source')
-    for p,h in paths.items():
-        require(digest(Path(p).read_bytes()) == h, 'executed bytes drift: '+p)
+    phase = 'before' if initial else 'after'
+    for p,h in [*paths.items(), ('Cargo.lock', LOCK)]:
+        data = Path(p).read_bytes()
+        actual = digest(data)
+        print(f'BYTES {phase} {p} sha256={actual} size={len(data)}', flush=True)
+        if actual != h:
+            blob = git('show', TARGET+':'+p)
+            first = next((i for i,(a,b) in enumerate(zip(blob,data)) if a!=b), min(len(blob),len(data)))
+            crlf = b'\r\n'
+            print(git('ls-files','--eol','--',p).decode().strip(), flush=True)
+            raise SystemExit(f'executed bytes drift: {p} expected_sha256={h} expected_size={len(blob)} '
+                             f'first_offset={first} expected_crlf={blob.count(crlf)} actual_crlf={data.count(crlf)}')
     print(f'ATTEST base={BASE} candidate={TARGET} patch={PATCH} paths={len(paths)} workflow={os.environ["WORKFLOW_SHA"]}',flush=True)
 
 if __name__ == '__main__':
