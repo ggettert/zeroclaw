@@ -50,16 +50,19 @@ def case(pkg, selector, *required):
 
 updates='plugins::update::tests::'; quick='quickstart_plugins::tests::'; gate='api_plugins::tests::'; cred='registry_credentials_are_not_projected_into_the_response'; priv='private_origin_load_failure_identifies_source_without_a_retry_recipe'; refuse='registry_approval_and_install_refuse_unprintable_commands'; cc='component::plugin_update_cli::'
 cases=['approval_withholds_non_copyable_registry_command_and_keeps_installed_version','successful_union_search_shows_distinct_private_origin_labels_not_credentials','approval_from_environment_selected_origin_pins_that_origin_in_the_real_cli_command','multi_registry_update_requires_explicit_origin_after_original_publisher_removes_package']
+parity = 'serialized_registry_id_is_the_origin_label_or_null'
 if win:
+    case(gw, gate+parity)
     run(['powershell.exe','-NoProfile','-File','scripts/ci/registry_windows_gate.ps1'])
     for s in cases[:2]: case(component,cc+s)
     case(bin,updates+refuse); case(bin,quick+priv); case(gw,gate+cred)
 else:
+    case(gw,gate,cred,parity)
     run(['cargo','+1.98.0','fmt','--all','--','--check'])
     case(plugins,'registry::tests::','offline_cache_requires_the_selected_stamped_origin','origin_collection_preserves_empty_sources_exact_sets_and_legacy_reader_guard','private_registry_origins_are_fetchable_but_not_copy_ready','cache_staging_collision_preserves_foreign_file_and_canonical_cache')
     case(rt,'skills::suggestions::tests::','union_cache_suggestions_pin_public_origins_and_withhold_private_commands')
     for s in ['plugin_update_cli_strings_are_translated_in_every_locale','quickstart_plugin_step_strings_format_in_every_locale']: case(rt,'i18n::tests::'+s)
-    case(gw,gate,cred); case(bin,updates,refuse)
+    case(bin,updates,refuse)
     case(bin,'plugin_registry::tests::private_registry_error_reports_status_and_label_not_url')
     case(bin,quick+priv); case(bin,quick+'selected_origin_load_failure_retry_keeps_raw_origin_and_version')
     for s in cases: case(component,cc+s)

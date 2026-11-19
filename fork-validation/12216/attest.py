@@ -4,11 +4,11 @@ import hashlib
 import os
 import sys
 
-BASE = 'f1f577c85348acce58a7d98b7462394043757a4d'
-TARGET = '42247c1b771196c9dc66ab32ce879241e317d888'
-PATCH = 'ccae5adcbd34d18cc2525846672911a760fe4f4c5434665951f4b0733aa700fe'
-MANIFEST = 'dfbfa70f7caefff7b4dd35cf85826bf6dc8fc783e1fdc8aa8accc6e38816fe2d'
-LOCK = '6fc8a5e9de0fd29a3cff892f17cb7d377728ebfc05522248eb2750c01bd54119'
+BASE = 'dfc70a2b499a5e5ad777a9174a216a29fda7aa35'
+TARGET = 'e7543ac01e7326477217fc00e86cc8084ec1dfcc'
+PATCH = '3309cfa6b178faa328a27e7ab43992a1f0813cb4eaecdd434756a1e9403068c9'
+MANIFEST = 'c06e67178d5ff326c3f2020c8edb40a263476857fd503ee1245663e282b53895'
+LOCK = '364aa9fad68e8e7272cb1e81b0f334a2be6c3d98bf0dc237a52b1c83648522f0'
 HERE = Path(__file__).resolve().parent
 
 def require(ok, msg):
@@ -22,28 +22,24 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 def attest(initial):
-    patch = HERE / 'candidate.patch'
-    manifest = HERE / 'files.sha256'
-    require(digest(patch.read_bytes()) == PATCH and digest(manifest.read_bytes()) == MANIFEST,'frozen input drift')
-    paths = {p:h for h,p in (s.split('  ') for s in manifest.read_text().splitlines())}
-    require(len(paths) == 20, 'manifest path count')
+    def manifest(name, expected):
+        data = (HERE / name).read_bytes()
+        require(digest(data) == expected, 'frozen manifest drift: '+name)
+        return {p:h for h,p in (s.split('  ') for s in data.decode().splitlines())}
+    paths = manifest('files.sha256', MANIFEST)
+    checkout = manifest('checkout.sha256', 'f1062f69c528b1600d7c19b17e757e517bb687e98398e0ed29243be7fc3a27c0')
+    require(len(paths)==33 and paths.keys()==checkout.keys(), 'manifest set drift')
+    require(digest(git('diff','--binary','--full-index', BASE, TARGET)) == PATCH, 'combined patch drift')
     require(git('remote','get-url','origin').decode().strip().removesuffix('.git') == 'https://github.com/ggettert/zeroclaw','source origin drift')
-    require(git('rev-parse',TARGET+'^').decode().strip() == BASE, 'candidate parent drift')
+    require(git('rev-parse',TARGET+'^^2').decode().strip() == BASE, 'candidate merge base drift')
     require(set(git('diff','--name-only',BASE,TARGET).decode().splitlines()) == set(paths), 'candidate path set drift')
     for p,h in paths.items():
         require(git('ls-tree',TARGET,'--',p).startswith(b'100644 blob ') and digest(git('show',TARGET+':'+p)) == h, 'candidate Git mode/blob drift: '+p)
-    if initial:
-        require(not git('status','--porcelain') and git('rev-parse','HEAD').decode().strip()==TARGET, 'unclean initial target')
-        git('checkout','--detach',BASE)
-        require(not git('status','--porcelain'), 'unclean base')
-        git('apply','--check',str(patch))
-        git('apply',str(patch))
-    require(git('rev-parse','HEAD').decode().strip()==BASE, 'execution base drift')
-    git('diff','--exit-code','--cached',BASE)
-    git('diff','--exit-code',TARGET,'--')
-    require(not git('ls-files','--others','--exclude-standard'), 'unexpected untracked source')
+    require(git('rev-parse','HEAD').decode().strip()==TARGET, 'execution commit drift')
+    require(not git('status','--porcelain','--untracked-files=all'), 'unclean source')
+    require(digest(git('show',TARGET+':Cargo.lock'))==LOCK, 'lock blob drift')
     phase = 'before' if initial else 'after'
-    for p,h in [*paths.items(), ('Cargo.lock', LOCK)]:
+    for p,h in [*checkout.items(), ('Cargo.lock', LOCK)]:
         data = Path(p).read_bytes()
         actual = digest(data)
         print(f'BYTES {phase} {p} sha256={actual} size={len(data)}', flush=True)

@@ -1,4 +1,5 @@
 name: Fork frozen registry validation
+run-name: Registry parity e7543ac / ${{ inputs.stage }}
 on:
   workflow_dispatch:
     inputs:
@@ -14,11 +15,11 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: fork-12216-frozen-20261119
+  group: fork-12216-parity-e7543ac-${{ inputs.stage }}
   cancel-in-progress: false
 jobs:
   validate:
-    if: github.repository == 'ggettert/zeroclaw' && github.ref == 'refs/heads/validation/12216-20261119-ci' && github.event_name == 'workflow_dispatch' && inputs.target_sha == '42247c1b771196c9dc66ab32ce879241e317d888' && (inputs.stage == 'linux' || inputs.stage == 'windows')
+    if: github.repository == 'ggettert/zeroclaw' && github.ref == 'refs/heads/validation/12216-parity-e7543ac-ci' && github.event_name == 'workflow_dispatch' && inputs.target_sha == 'e7543ac01e7326477217fc00e86cc8084ec1dfcc' && (inputs.stage == 'linux' || inputs.stage == 'windows')
     runs-on: ${{ inputs.stage == 'windows' && 'windows-2022' || 'ubuntu-24.04' }}
     timeout-minutes: 120
     env:
@@ -52,11 +53,11 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: ggettert/zeroclaw
-          ref: 42247c1b771196c9dc66ab32ce879241e317d888
+          ref: e7543ac01e7326477217fc00e86cc8084ec1dfcc
           path: source
-          fetch-depth: 2
+          fetch-depth: 3
           persist-credentials: false
-      - name: Attest candidate, apply frozen patch to pristine base
+      - name: Attest exact checkout against frozen combined patch and both manifests
         working-directory: source
         shell: bash
         run: |
