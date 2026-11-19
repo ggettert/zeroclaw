@@ -72,6 +72,19 @@ jobs:
           esac
           rustup toolchain install "1.98.0-$host" --profile minimal --no-self-update \
             --component rustfmt --target "$host" --target wasm32-wasip2
+      - name: Prefetch locked dependencies for native and WASI tests
+        working-directory: source
+        shell: bash
+        env:
+          CARGO_NET_OFFLINE: 'false'
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS:$STAGE" in
+            Linux:linux) host=x86_64-unknown-linux-gnu ;;
+            Windows:windows) host=x86_64-pc-windows-msvc ;;
+            *) exit 1 ;;
+          esac
+          cargo +1.98.0 fetch --locked --target "$host" --target wasm32-wasip2
       - name: Pinned toolchain admission and selected regression tests
         working-directory: source
         shell: bash
