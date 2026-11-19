@@ -59,6 +59,19 @@ jobs:
           set -euo pipefail
           test "$(git -C ../tooling rev-parse HEAD)" = "$WORKFLOW_SHA"
           python ../tooling/fork-validation/12216/attest.py before
+      - name: Install pinned Rust, rustfmt and native/WASI targets
+        shell: bash
+        env:
+          RUSTUP_DIST_SERVER: https://static.rust-lang.org
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS:$STAGE" in
+            Linux:linux) host=x86_64-unknown-linux-gnu ;;
+            Windows:windows) host=x86_64-pc-windows-msvc ;;
+            *) exit 1 ;;
+          esac
+          rustup toolchain install "1.98.0-$host" --profile minimal --no-self-update \
+            --component rustfmt --target "$host" --target wasm32-wasip2
       - name: Pinned toolchain admission and selected regression tests
         working-directory: source
         shell: bash
