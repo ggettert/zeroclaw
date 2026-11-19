@@ -1,0 +1,1738 @@
+diff --git a/crates/zeroclaw-gateway/src/api_plugins.rs b/crates/zeroclaw-gateway/src/api_plugins.rs
+index 3aaf8492b0edf0afa058545f89ef10e9f65e7dae..26ef0564303e709b25e7d74091b5b932d244bcfc 100644
+--- a/crates/zeroclaw-gateway/src/api_plugins.rs
++++ b/crates/zeroclaw-gateway/src/api_plugins.rs
+@@ -153,6 +153,9 @@ pub async fn list_plugins(State(state): State<AppState>, headers: HeaderMap) ->
+                 signature_mode,
+                 trusted_publisher_keys,
+                 data_dir,
++                std::env::var(zeroclaw_plugins::registry::REGISTRY_URL_ENV)
++                    .ok()
++                    .as_deref(),
+             )
+         })
+         .await
+@@ -194,6 +197,7 @@ fn build_response(
+     signature_mode: String,
+     trusted_publisher_keys: Vec<String>,
+     data_dir: std::path::PathBuf,
++    selection: Option<&str>,
+ ) -> OriginPluginsResponse {
+     use zeroclaw_plugins::catalog::origin_package_catalog as package_catalog;
+ 
+@@ -247,7 +251,8 @@ fn build_response(
+     };
+ 
+     let registry = match zeroclaw_plugins::registry::read_cached_registry_collection(&data_dir) {
+-        Ok(index) => index.filter(zeroclaw_plugins::registry::cache_matches_environment),
++        Ok(index) => index
++            .filter(|index| zeroclaw_plugins::registry::cache_matches_selection(index, selection)),
+         Err(error) => {
+             ::zeroclaw_log::record!(
+                 ERROR,
+@@ -347,6 +352,7 @@ mod tests {
+                 "disabled".to_string(),
+                 Vec::new(),
+                 temp.path().join("missing-data-directory"),
++                None,
+             )
+         };
+ 
+@@ -403,6 +409,7 @@ mod tests {
+             "disabled".to_string(),
+             Vec::new(),
+             temp.path().to_path_buf(),
++            Some("https://example.invalid/index.json"),
+         );
+ 
+         assert_eq!(response.plugins.len(), 1);
+@@ -447,6 +454,7 @@ mod tests {
+             "disabled".to_string(),
+             Vec::new(),
+             temp.path().to_path_buf(),
++            None,
+         );
+ 
+         assert!(response.plugins.is_empty());
+@@ -503,14 +511,20 @@ mod tests {
+         };
+         write_cached_registry_index(temp.path(), registry_url, &index).expect("registry cache");
+ 
+-        let response = build_response(
+-            true,
+-            "plugins".to_string(),
+-            temp.path().join("missing-plugins"),
+-            "disabled".to_string(),
+-            Vec::new(),
+-            temp.path().to_path_buf(),
+-        );
++        let response_for = |selection| {
++            build_response(
++                true,
++                "plugins".to_string(),
++                temp.path().join("missing-plugins"),
++                "disabled".to_string(),
++                Vec::new(),
++                temp.path().to_path_buf(),
++                selection,
++            )
++        };
++        assert!(response_for(None).plugins.is_empty());
++        assert!(response_for(Some(" ")).plugins.is_empty());
++        let response = response_for(Some(registry_url));
+         let json = serde_json::to_string(&response).expect("catalog response JSON");
+ 
+         assert!(json.contains("mail@1.2.3"));
+diff --git a/crates/zeroclaw-plugins/src/catalog.rs b/crates/zeroclaw-plugins/src/catalog.rs
+index 0d52779465979d09781bb5853dea8960783eceb0..7e108f2bf8798836b0affb8c1c96dc56a0fc068d 100644
+--- a/crates/zeroclaw-plugins/src/catalog.rs
++++ b/crates/zeroclaw-plugins/src/catalog.rs
+@@ -241,13 +241,8 @@ pub fn origin_package_catalog<'a>(
+         );
+     }
+     if let Some(registry) = registry {
+-        for index in &registry.registries {
+-            let origin = Some(
+-                index
+-                    .registry_url
+-                    .as_deref()
+-                    .unwrap_or(crate::registry::DEFAULT_REGISTRY_URL),
+-            );
++        for (origin, index) in registry.stamped_indexes() {
++            let origin = Some(origin);
+             for metadata in package_catalog(installed, Some(index)) {
+                 if metadata.available().is_none() {
+                     continue;
+diff --git a/crates/zeroclaw-plugins/src/registry.rs b/crates/zeroclaw-plugins/src/registry.rs
+index 9b718855648a577d9f9b0fcc20613ef65a0df88a..3cc6a882ad4f0e063df712027c67f2de33f20e6f 100644
+--- a/crates/zeroclaw-plugins/src/registry.rs
++++ b/crates/zeroclaw-plugins/src/registry.rs
+@@ -66,14 +66,17 @@ pub fn install_source(entry: &PluginRegistryEntry) -> String {
+     format!("{}@{}", entry.name, entry.version)
+ }
+ 
++/// Legacy string-returning API: an empty string means no copy-ready recipe.
++/// New renderers should handle `None` from [`registry_install_command_for`].
+ pub fn install_command(entry: &PluginRegistryEntry, registry_url: Option<&str>) -> String {
+-    let source = install_source(entry);
+-    match registry_url {
+-        Some(registry_url) if !registry_url.trim().is_empty() => {
+-            format!("zeroclaw plugin install {source} --registry {registry_url}")
+-        }
+-        _ => format!("zeroclaw plugin install {source}"),
+-    }
++    registry_install_command_for(
++        ShellDialect::host(),
++        entry,
++        registry_url.filter(|url| !url.trim().is_empty()),
++        None,
++        false,
++    )
++    .unwrap_or_default()
+ }
+ 
+ pub fn parse_plugin_spec(source: &str) -> Result<PluginSpec> {
+@@ -165,7 +168,7 @@ pub fn registry_sources(value: &str) -> Result<Vec<String>> {
+                     .is_some_and(|s| s.eq_ignore_ascii_case("http://")))
+             || value.chars().any(|c| c.is_whitespace() || c.is_control())
+         {
+-            bail!("plugin registry must be an HTTP(S) URL: {value}");
++            bail!("plugin registry must be an HTTP(S) URL");
+         }
+         if !sources.contains(&value) {
+             sources.push(value);
+@@ -195,29 +198,24 @@ impl std::ops::Deref for RegistryEntryView<'_> {
+     }
+ }
+ impl RegistryCollection {
+-    pub fn entries(&self) -> Vec<RegistryEntryView<'_>> {
++    pub(crate) fn stamped_indexes(&self) -> impl Iterator<Item = (&str, &PluginRegistryIndex)> {
+         self.registries
+             .iter()
+-            .flat_map(|index| {
+-                index.plugins.iter().map(move |entry| RegistryEntryView {
+-                    origin: index
+-                        .registry_url
+-                        .as_deref()
+-                        .unwrap_or(DEFAULT_REGISTRY_URL),
+-                    entry,
+-                })
++            .filter_map(|index| Some((index.registry_url.as_deref()?, index)))
++    }
++    pub fn entries(&self) -> Vec<RegistryEntryView<'_>> {
++        self.stamped_indexes()
++            .flat_map(|(origin, index)| {
++                index
++                    .plugins
++                    .iter()
++                    .map(move |entry| RegistryEntryView { origin, entry })
+             })
+             .collect()
+     }
+     pub fn sources(&self) -> Vec<String> {
+-        self.registries
+-            .iter()
+-            .map(|index| {
+-                index
+-                    .registry_url
+-                    .clone()
+-                    .unwrap_or_else(|| DEFAULT_REGISTRY_URL.to_string())
+-            })
++        self.stamped_indexes()
++            .map(|(origin, _)| origin.to_owned())
+             .collect()
+     }
+ }
+@@ -233,18 +231,11 @@ pub fn search_registry_entries<'a>(
+     query: &str,
+ ) -> Vec<RegistryEntryView<'a>> {
+     catalog
+-        .registries
+-        .iter()
+-        .flat_map(|index| {
++        .stamped_indexes()
++        .flat_map(|(origin, index)| {
+             search_entries(index, query)
+                 .into_iter()
+-                .map(move |entry| RegistryEntryView {
+-                    origin: index
+-                        .registry_url
+-                        .as_deref()
+-                        .unwrap_or(DEFAULT_REGISTRY_URL),
+-                    entry,
+-                })
++                .map(move |entry| RegistryEntryView { origin, entry })
+         })
+         .collect()
+ }
+@@ -266,48 +257,52 @@ pub fn resolve_registry_entry<'a>(
+     let index = *origins.first().ok_or_else(|| {
+         anyhow::Error::msg(format!("plugin '{}' not found in registry", spec.name))
+     })?;
++    let origin = index
++        .registry_url
++        .as_deref()
++        .context("missing registry origin")?;
+     Ok(RegistryEntryView {
+-        origin: index
+-            .registry_url
+-            .as_deref()
+-            .unwrap_or(DEFAULT_REGISTRY_URL),
++        origin,
+         entry: resolve_entry(index, spec)?,
+     })
+ }
+ pub fn resolved_registry_entries(catalog: &RegistryCollection) -> Vec<RegistryEntryView<'_>> {
+     catalog
+-        .registries
+-        .iter()
+-        .flat_map(|index| {
++        .stamped_indexes()
++        .flat_map(|(origin, index)| {
+             resolved_entries(index)
+                 .into_iter()
+-                .map(move |entry| RegistryEntryView {
+-                    origin: index
+-                        .registry_url
+-                        .as_deref()
+-                        .unwrap_or(DEFAULT_REGISTRY_URL),
+-                    entry,
+-                })
++                .map(move |entry| RegistryEntryView { origin, entry })
+         })
+         .collect()
+ }
+ pub fn cache_matches_sources(catalog: &RegistryCollection, sources: &[String]) -> bool {
+-    let cached = catalog.sources();
+-    cached.len() == sources.len() && cached.iter().all(|source| sources.contains(source))
++    let cached = catalog
++        .stamped_indexes()
++        .map(|(origin, _)| origin)
++        .collect::<std::collections::BTreeSet<_>>();
++    !cached.is_empty()
++        && cached.len() == catalog.registries.len()
++        && cached == sources.iter().map(String::as_str).collect()
++}
++/// Same unset/blank selection for fetching and all offline readers.
++pub fn effective_registry_selection(selection: Option<&str>) -> &str {
++    selection
++        .filter(|value| !value.trim().is_empty())
++        .unwrap_or(DEFAULT_REGISTRY_URL)
++}
++pub fn cache_matches_selection(catalog: &RegistryCollection, selection: Option<&str>) -> bool {
++    registry_sources(effective_registry_selection(selection))
++        .is_ok_and(|sources| cache_matches_sources(catalog, &sources))
+ }
+ pub fn cache_matches_environment(catalog: &RegistryCollection) -> bool {
+-    match std::env::var(REGISTRY_URL_ENV)
+-        .ok()
+-        .filter(|s| !s.trim().is_empty())
+-    {
+-        Some(value) => {
+-            registry_sources(&value).is_ok_and(|sources| cache_matches_sources(catalog, &sources))
+-        }
+-        None => true,
+-    }
++    cache_matches_selection(catalog, std::env::var(REGISTRY_URL_ENV).ok().as_deref())
+ }
+ fn validate_collection(catalog: &RegistryCollection) -> Result<()> {
+     let sources = catalog.sources();
++    if sources.len() != catalog.registries.len() {
++        bail!("cached registry index has no origin; refresh the registry");
++    }
+     let parsed = registry_sources(&serde_json::to_string(&sources)?)?;
+     if parsed.len() != sources.len() {
+         bail!("duplicate cached registry origin");
+@@ -435,8 +430,29 @@ pub fn registry_origin_label(origin: &str) -> String {
+         crate::signature::sha256_hex(origin.as_bytes())
+     )
+ }
++/// Treat all query/fragment data and possible userinfo as private, including
++/// unusual URL spellings. This policy only controls display, not fetching.
++pub fn registry_url_is_private(url: &str) -> bool {
++    // Conservative for @ in paths too: do not partially parse or reconstruct URLs.
++    url.contains(['@', '?', '#'])
++}
++
++/// A registry recipe must not reveal a private origin. On Windows it must
++/// also preserve *every* argument in both cmd.exe and PowerShell.
++pub fn registry_command_available(
++    dialect: ShellDialect,
++    origin: Option<&str>,
++    values: &[&str],
++) -> bool {
++    !origin.is_some_and(registry_url_is_private)
++        && (dialect != ShellDialect::Windows
++            || values.iter().all(|value| {
++                windows_form_is_literal(value)
++                    && !value.contains(['\u{201c}', '\u{201d}', '\u{201e}'])
++            }))
++}
+ /// Raw arguments are quoted only once, for the operator's host shell.
+-/// Returns `None` when a Windows copy-ready command cannot preserve every
++/// Returns `None` for private origins, or when a Windows copy-ready command cannot preserve every
+ /// argument in both cmd.exe and PowerShell. This does not reject registry data
+ /// or prevent structured installation. Explicit PowerShell is shell-specific.
+ pub fn registry_install_command_for(
+@@ -455,15 +471,7 @@ pub fn registry_install_command_for(
+     if let Some(dir) = dir.as_deref() {
+         values.push(dir);
+     }
+-    // A marked PowerShell recipe is not inert in cmd.exe: separators can run.
+-    if dialect == ShellDialect::Windows
+-        && !values.iter().all(|value| {
+-            windows_form_is_literal(value)
+-                // PowerShell also treats these smart double quotes as string
+-                // delimiters, even when the opening delimiter is ASCII.
+-                && !value.chars().any(|c| matches!(c, '\u{201c}' | '\u{201d}' | '\u{201e}'))
+-        })
+-    {
++    if !registry_command_available(dialect, origin, &values) {
+         return None;
+     }
+     let arg = |raw: &str| {
+@@ -653,11 +661,62 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn offline_cache_requires_the_selected_stamped_origin() {
++        let dir = tempfile::tempdir().unwrap();
++        let private = "https://registry.invalid/index?channel=sample";
++        for origin in [private, DEFAULT_REGISTRY_URL] {
++            write_cached_registry_index(dir.path(), origin, &sample_index()).unwrap();
++            let cache = read_cached_registry_collection(dir.path())
++                .unwrap()
++                .unwrap();
++            for selection in [None, Some(""), Some("  ")] {
++                assert_eq!(
++                    cache_matches_selection(&cache, selection),
++                    origin == DEFAULT_REGISTRY_URL
++                );
++            }
++            assert!(cache_matches_selection(&cache, Some(origin)));
++            assert!(!cache_matches_selection(&cache, Some("[invalid")));
++        }
++        let unstamped = sample_index();
++        let path = registry_cache_path(dir.path());
++        std::fs::write(&path, serde_json::to_vec(&unstamped).unwrap()).unwrap();
++        assert!(read_cached_registry_collection(dir.path()).is_err());
++        let catalog = RegistryCollection::from(unstamped);
++        assert!(catalog.entries().is_empty());
++        assert!(crate::catalog::origin_package_catalog(&[], Some(&catalog)).is_empty());
++        assert!(!cache_matches_selection(&catalog, None));
++    }
++
++    #[test]
++    fn private_registry_origins_are_fetchable_but_not_copy_ready() {
++        let entry = &sample_index().plugins[0];
++        for origin in [
++            "https://sample@registry.invalid/index",
++            "https://registry.invalid/index?sample",
++            "https://registry.invalid/index#sample",
++        ] {
++            assert!(registry_sources(origin).is_ok());
++            assert!(install_command(entry, Some(origin)).is_empty());
++            for dialect in [
++                ShellDialect::Posix,
++                ShellDialect::Windows,
++                ShellDialect::PowerShell,
++            ] {
++                assert!(
++                    registry_install_command_for(dialect, entry, Some(origin), None, false)
++                        .is_none()
++                );
++            }
++        }
++    }
++
+     #[test]
+     fn mixed_case_legacy_cache_and_public_command_helpers_remain_compatible() {
+         let dir = tempfile::tempdir().unwrap();
+         let index = sample_index();
+-        let origin = "HTTPS://Example.invalid/index?channel=stable";
++        let origin = "HTTPS://Example.invalid/index";
+         write_cached_registry_index(dir.path(), origin, &index).unwrap();
+         let legacy = read_cached_registry_index(dir.path()).unwrap().unwrap();
+         assert_eq!(legacy.registry_url.as_deref(), Some(origin));
+@@ -803,7 +862,7 @@ mod tests {
+     #[test]
+     fn raw_registry_arguments_render_for_each_supported_shell() {
+         let entry = &sample_index().plugins[0];
+-        let origin = "https://registry.example/index?channel=stable&team=one";
++        let origin = "https://registry.example/index/channel=stable&team=one";
+         let posix =
+             registry_install_command_for(ShellDialect::Posix, entry, Some(origin), None, false)
+                 .unwrap();
+@@ -838,7 +897,7 @@ mod tests {
+             ),
+             None
+         );
+-        let tricky = "https://registry.example/index?team=it's%20mine";
++        let tricky = "https://registry.example/index/team=it's%20mine";
+         let powershell =
+             registry_install_command_for(ShellDialect::PowerShell, entry, Some(tricky), None, true)
+                 .unwrap();
+@@ -912,9 +971,9 @@ mod tests {
+         named_entry.version = "1".into();
+         assert_eq!(
+             registry_install_command_for(ShellDialect::Windows, &named_entry,
+-                Some("https://registry.invalid/index?team=one&channel=stable"),
++                Some("https://registry.invalid/index/team=one&channel=stable"),
+                 Some(Path::new("C:/profiles/team one")), true),
+-            Some(r#"zeroclaw --config-dir "C:/profiles/team one" plugin install "calendar\@1" --registry "https://registry.invalid/index?team=one&channel=stable" --no-verify"#.into())
++            Some(r#"zeroclaw --config-dir "C:/profiles/team one" plugin install "calendar\@1" --registry "https://registry.invalid/index/team=one&channel=stable" --no-verify"#.into())
+         );
+         // Separators, caret and parentheses remain data inside the shared
+         // double-quoted subset. They do not by themselves require suppression.
+diff --git a/crates/zeroclaw-plugins/tests/registry_windows_commands.rs b/crates/zeroclaw-plugins/tests/registry_windows_commands.rs
+index 0604fab75e3d2f5f5c074bc730fba59ae8eeedd8..a820dfb44f80113b768fe33256724e1d9498eb4e 100644
+--- a/crates/zeroclaw-plugins/tests/registry_windows_commands.rs
++++ b/crates/zeroclaw-plugins/tests/registry_windows_commands.rs
+@@ -103,9 +103,9 @@ fn registry_windows_native_shells_preserve_safe_arguments() {
+                 let fixture = Fixture::new();
+                 let unicode = version == "1café日历";
+                 let origin = if unicode {
+-                    "https://registry.invalid/index?channel=stable&team=café日历"
++                    "https://registry.invalid/index/channel=stable&team=café日历"
+                 } else {
+-                    "https://registry.invalid/index?channel=stable&team=one"
++                    "https://registry.invalid/index/channel=stable&team=one"
+                 };
+                 let config_text = if unicode {
+                     "C:/profiles/team café日历"
+@@ -197,7 +197,7 @@ fn registry_windows_native_shells_have_no_recipe_for_unsafe_values() {
+             let fixture = Fixture::new();
+             let mut plugin = entry("1");
+             plugin.name = "calendar\\".into();
+-            let origin = "https://registry.invalid/index?team=one&channel=stable";
++            let origin = "https://registry.invalid/index/team=one&channel=stable";
+             let config = "C:/profiles/team one";
+             let line = registry_install_command_for(
+                 ShellDialect::Windows,
+@@ -209,7 +209,7 @@ fn registry_windows_native_shells_have_no_recipe_for_unsafe_values() {
+             .unwrap();
+             assert_eq!(
+                 line,
+-                r#"zeroclaw --config-dir "C:/profiles/team one" plugin install "calendar\@1" --registry "https://registry.invalid/index?team=one&channel=stable" --no-verify"#
++                r#"zeroclaw --config-dir "C:/profiles/team one" plugin install "calendar\@1" --registry "https://registry.invalid/index/team=one&channel=stable" --no-verify"#
+             );
+             let output = fixture.run(shell, &line, delayed);
+             assert!(output.status.success(), "{shell}: {output:?}");
+@@ -235,7 +235,7 @@ fn registry_windows_native_shells_have_no_recipe_for_unsafe_values() {
+ fn registry_explicit_powershell_preserves_shell_specific_values() {
+     let fixture = Fixture::new();
+     let version = "1%ZC_REGISTRY_EXPAND% & echo ZC_REGISTRY_HARMLESS_MARKER_12216";
+-    let origin = "https://registry.invalid/index?team=it's%20mine&channel=stable";
++    let origin = "https://registry.invalid/index/team=it's%20mine&channel=stable";
+     let config = "C:/profiles/100%team";
+     let line = registry_install_command_for(
+         ShellDialect::PowerShell,
+diff --git a/crates/zeroclaw-runtime/locales/en/cli.ftl b/crates/zeroclaw-runtime/locales/en/cli.ftl
+index 0ace48b67f33cc2161f5fa695bc8f0144b27ba7d..e05b8d23527342817d11daa4e13ea481382b63de 100644
+--- a/crates/zeroclaw-runtime/locales/en/cli.ftl
++++ b/crates/zeroclaw-runtime/locales/en/cli.ftl
+@@ -1732,5 +1732,9 @@ turn-repeated-failure-recovery = The same tool call failed with the same result
+ turn-repeated-failure-exhausted = The recovery retry failed with the same result, so this turn has stopped. Completed tool results have been preserved. You can retry in a new turn.
+ turn-repeated-failure-retry-skipped = Skipped an additional identical call in this recovery batch. Only one recovery retry is available.
+ 
+-cli-plugin-registry-command-unavailable = A copy-ready install command is unavailable because these values cannot be passed literally in both cmd.exe and PowerShell. The registry entry remains available; use structured installation or quote arguments yourself for a known shell.
+-cli-quickstart-plugins-load-check-command-unavailable = {$name} was not installed: it does not load against this host: {$error}. A copy-ready retry command is unavailable because these values cannot be passed literally in both cmd.exe and PowerShell. No install command was generated.
++cli-plugin-registry-command-unavailable = A copy-ready install command is unavailable. Use the original registry URL separately; the registry ID is not a URL.
++cli-quickstart-plugins-load-check-command-unavailable = {$name} was not installed: it does not load against this host: {$error}. No copy-ready retry command is available.
++cli-plugin-command-unavailable = No copy-ready command is available. Supply the original arguments separately for the intended source.
++cli-plugin-displaced-command-unavailable = An interrupted update left '{$name}' displaced. No copy-ready recovery command is available.
++cli-plugin-not-installed-command-unavailable = '{$name}' is not installed. No copy-ready install command is available.
++cli-plugin-interrupted-command-unavailable = Could not update '{$name}': {$error}. The previous version is preserved at {$preserved}. No copy-ready recovery command is available.
+diff --git a/crates/zeroclaw-runtime/locales/es/cli.ftl b/crates/zeroclaw-runtime/locales/es/cli.ftl
+index 6b64582b16a7a1daeb02ce3cb953f2256272d81a..7a8539b03ef12f4877f9cb451e4c30145b08ecef 100644
+--- a/crates/zeroclaw-runtime/locales/es/cli.ftl
++++ b/crates/zeroclaw-runtime/locales/es/cli.ftl
+@@ -1361,5 +1361,9 @@ channel-approval-opt-reject = Rechazar
+ channel-approval-opt-reject-with-edit = Rechazar con edición
+ tool-git-operations-error-docker-runtime-write-unsupported = Los comandos de escritura de Git no están disponibles con el entorno de ejecución Docker porque no pueden confinarse a su contenedor.
+ 
+-cli-plugin-registry-command-unavailable = No hay un comando de instalación listo para copiar porque estos valores no se pueden pasar literalmente tanto en cmd.exe como en PowerShell. La entrada del registro sigue disponible; usa la instalación estructurada o entrecomilla los argumentos para un intérprete conocido.
+-cli-quickstart-plugins-load-check-command-unavailable = {$name} no se instaló: no se carga en este host: {$error}. No hay un comando de reintento listo para copiar porque estos valores no se pueden pasar literalmente tanto en cmd.exe como en PowerShell. No se generó ningún comando de instalación.
++cli-plugin-registry-command-unavailable = No hay un comando de instalación listo para copiar. Indica por separado la URL original del registro; el identificador no es una URL.
++cli-quickstart-plugins-load-check-command-unavailable = No se instaló {$name}: no se carga en este host: {$error}. No hay un comando de reintento listo para copiar.
++cli-plugin-command-unavailable = No hay un comando listo para copiar. Indica por separado los argumentos originales para el origen deseado.
++cli-plugin-displaced-command-unavailable = Una actualización interrumpida dejó a {$name} fuera de su ubicación. No hay un comando de recuperación listo para copiar.
++cli-plugin-not-installed-command-unavailable = {$name} no está instalado. No hay un comando de instalación listo para copiar.
++cli-plugin-interrupted-command-unavailable = No se pudo actualizar {$name}: {$error}. La versión anterior se conserva en {$preserved}. No hay un comando de recuperación listo para copiar.
+diff --git a/crates/zeroclaw-runtime/locales/fr/cli.ftl b/crates/zeroclaw-runtime/locales/fr/cli.ftl
+index 9c09acba17db8f58a3e6754d265a0e282adb4c54..0367ed7886d86ec7175162255ce29cdeefc21229 100644
+--- a/crates/zeroclaw-runtime/locales/fr/cli.ftl
++++ b/crates/zeroclaw-runtime/locales/fr/cli.ftl
+@@ -1364,5 +1364,9 @@ channel-approval-opt-reject = Rejeter
+ channel-approval-opt-reject-with-edit = Rejeter avec modification
+ tool-git-operations-error-docker-runtime-write-unsupported = Les commandes d’écriture Git ne sont pas disponibles avec l’environnement d’exécution Docker, car elles ne peuvent pas être confinées à son conteneur.
+ 
+-cli-plugin-registry-command-unavailable = Aucune commande d'installation prête à copier n'est disponible, car ces valeurs ne peuvent pas être transmises littéralement à la fois dans cmd.exe et dans PowerShell. L'entrée du registre reste disponible ; utilisez l'installation structurée ou mettez vous-même les arguments entre guillemets pour un interpréteur connu.
+-cli-quickstart-plugins-load-check-command-unavailable = {$name} n'a pas été installé : il ne se charge pas sur cet hôte : {$error}. Aucune commande de nouvelle tentative prête à copier n'est disponible, car ces valeurs ne peuvent pas être transmises littéralement à la fois dans cmd.exe et dans PowerShell. Aucune commande d'installation n'a été générée.
++cli-plugin-registry-command-unavailable = Aucune commande d’installation prête à copier n’est disponible. Indiquez séparément l’URL d’origine du registre ; l’identifiant n’est pas une URL.
++cli-quickstart-plugins-load-check-command-unavailable = {$name} n’a pas été installé : son chargement sur cet hôte a échoué : {$error}. Aucune commande prête à copier pour réessayer.
++cli-plugin-command-unavailable = Aucune commande prête à copier. Fournissez séparément les arguments d’origine pour la source voulue.
++cli-plugin-displaced-command-unavailable = Une mise à jour interrompue a déplacé {$name}. Aucune commande de récupération prête à copier.
++cli-plugin-not-installed-command-unavailable = {$name} n’est pas installé. Aucune commande d’installation prête à copier.
++cli-plugin-interrupted-command-unavailable = Impossible de mettre à jour {$name} : {$error}. La version précédente est conservée dans {$preserved}. Aucune commande de récupération prête à copier.
+diff --git a/crates/zeroclaw-runtime/locales/ja/cli.ftl b/crates/zeroclaw-runtime/locales/ja/cli.ftl
+index fca7596ec2ced7778186140c5c776d0553e47f1b..d07d06423a71d0b49a8b13f22f7b2c3692fe50f6 100644
+--- a/crates/zeroclaw-runtime/locales/ja/cli.ftl
++++ b/crates/zeroclaw-runtime/locales/ja/cli.ftl
+@@ -1359,5 +1359,9 @@ channel-approval-opt-reject = 拒否
+ channel-approval-opt-reject-with-edit = 編集して拒否
+ tool-git-operations-error-docker-runtime-write-unsupported = Git の書き込みコマンドは Docker ランタイムでは利用できません。コンテナ内に閉じ込めることができないためです。
+ 
+-cli-plugin-registry-command-unavailable = これらの値を cmd.exe と PowerShell の両方でそのまま渡すことができないため、コピーして実行できるインストールコマンドは利用できません。レジストリエントリは引き続き利用できます。構造化されたインストールを使用するか、使用するシェルに合わせて引数を引用符で囲んでください。
+-cli-quickstart-plugins-load-check-command-unavailable = {$name} はインストールされませんでした: このホストで読み込めません: {$error}。これらの値を cmd.exe と PowerShell の両方でそのまま渡すことができないため、コピーして実行できる再試行コマンドは利用できません。インストールコマンドは生成されませんでした。
++cli-plugin-registry-command-unavailable = コピー用のインストールコマンドはありません。元のレジストリ URL を別途指定してください。レジストリ ID は URL ではありません。
++cli-quickstart-plugins-load-check-command-unavailable = {$name} はインストールされませんでした。このホストでの読み込みに失敗しました: {$error}。コピー用の再試行コマンドはありません。
++cli-plugin-command-unavailable = コピー用のコマンドはありません。対象の取得元に対応する元の引数を個別に指定してください。
++cli-plugin-displaced-command-unavailable = 更新が中断され、{$name} は元の場所にありません。コピー用の復旧コマンドはありません。
++cli-plugin-not-installed-command-unavailable = {$name} はインストールされていません。コピー用のインストールコマンドはありません。
++cli-plugin-interrupted-command-unavailable = {$name} を更新できませんでした: {$error}。以前のバージョンは {$preserved} に保持されています。コピー用の復旧コマンドはありません。
+diff --git a/crates/zeroclaw-runtime/locales/zh-CN/cli.ftl b/crates/zeroclaw-runtime/locales/zh-CN/cli.ftl
+index e5ab4355a31574adc5563ab074f11efec722c837..57457f4384e0017376e084726ec90a6eb7fd6585 100644
+--- a/crates/zeroclaw-runtime/locales/zh-CN/cli.ftl
++++ b/crates/zeroclaw-runtime/locales/zh-CN/cli.ftl
+@@ -1363,5 +1363,9 @@ tool-git-operations-error-docker-runtime-write-unsupported = Git 写入命令在
+ turn-context-window-exceeded-error = 本次请求超过所选模型的上下文容量。请减少请求内容或启用的工具，或选择上下文容量更大的模型。
+ cron-agent-job-failed = 定时任务未能完成，请重试或联系管理员查看日志。
+ 
+-cli-plugin-registry-command-unavailable = 这些值无法在 cmd.exe 和 PowerShell 中都按原样传递，因此无法提供可直接复制执行的安装命令。注册表条目仍然可用；请使用结构化安装，或根据所用的 shell 自行为参数添加引号。
+-cli-quickstart-plugins-load-check-command-unavailable = 未安装 {$name}：它无法在此主机上加载：{$error}。这些值无法在 cmd.exe 和 PowerShell 中都按原样传递，因此无法提供可直接复制执行的重试命令。未生成安装命令。
++cli-plugin-registry-command-unavailable = 无法提供可直接复制的安装命令。请另行指定原始注册表 URL；注册表 ID 不是 URL。
++cli-quickstart-plugins-load-check-command-unavailable = 未安装 {$name}：无法在此主机上加载：{$error}。没有可直接复制的重试命令。
++cli-plugin-command-unavailable = 没有可直接复制的命令。请为目标来源分别提供原始参数。
++cli-plugin-displaced-command-unavailable = 更新中断后，{$name} 不在原位置。没有可直接复制的恢复命令。
++cli-plugin-not-installed-command-unavailable = 未安装 {$name}。没有可直接复制的安装命令。
++cli-plugin-interrupted-command-unavailable = 无法更新 {$name}：{$error}。旧版本保留在 {$preserved}。没有可直接复制的恢复命令。
+diff --git a/crates/zeroclaw-runtime/src/i18n.rs b/crates/zeroclaw-runtime/src/i18n.rs
+index a929fc7dc504c51a1952c7dc51316c3647554317..4793606622c4353a729a56c5fd0880b04cd36fdf 100644
+--- a/crates/zeroclaw-runtime/src/i18n.rs
++++ b/crates/zeroclaw-runtime/src/i18n.rs
+@@ -2025,6 +2025,22 @@ mod tests {
+ 
+         type ParityCase<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a [&'a str]);
+         let cases: &[ParityCase] = &[
++            ("cli-plugin-command-unavailable", &[], &[]),
++            (
++                "cli-plugin-displaced-command-unavailable",
++                &[("name", NAME)],
++                &[NAME],
++            ),
++            (
++                "cli-plugin-not-installed-command-unavailable",
++                &[("name", NAME)],
++                &[NAME],
++            ),
++            (
++                "cli-plugin-interrupted-command-unavailable",
++                &[("name", NAME), ("error", ERROR), ("preserved", DISPLACED)],
++                &[NAME, ERROR, DISPLACED],
++            ),
+             (
+                 "cli-plugin-install-already-installed",
+                 &[("name", NAME), ("command", COMMAND)],
+diff --git a/crates/zeroclaw-runtime/src/skills/suggestions.rs b/crates/zeroclaw-runtime/src/skills/suggestions.rs
+index 1bcbd2bdaef8dc9ae71fb2869f51c61532db8d8c..0ae17f45f7fb24001adb51796d4efe373c481526 100644
+--- a/crates/zeroclaw-runtime/src/skills/suggestions.rs
++++ b/crates/zeroclaw-runtime/src/skills/suggestions.rs
+@@ -11,10 +11,13 @@ use zeroclaw_plugins::registry::{
+     ShellDialect, read_cached_registry_collection, registry_install_command_for,
+ };
+ 
++/// A skill source / plugin command, or the safe origin label when no command can be shown.
++type SuggestionSource = Result<String, String>;
++
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ struct InstallableSkillCapability {
+     name: String,
+-    source: Option<String>,
++    source: SuggestionSource,
+     aliases: Vec<String>,
+     install_kind: InstallKind,
+ }
+@@ -29,15 +32,21 @@ enum InstallKind {
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ struct InstallSuggestion {
+     name: String,
+-    source: Option<String>,
++    source: SuggestionSource,
+     matched: String,
+     install_kind: InstallKind,
+ }
+ 
+ impl InstallSuggestion {
+     pub fn render_user_message(&self) -> String {
+-        let Some(source) = self.source.as_deref() else {
+-            return crate::i18n::get_required_cli_string("cli-plugin-registry-command-unavailable");
++        let source = match self.source.as_deref() {
++            Ok(source) => source,
++            Err(label) => {
++                return format!(
++                    "{label}: {}",
++                    crate::i18n::get_required_cli_string("cli-plugin-registry-command-unavailable")
++                );
++            }
+         };
+         let (message_key, install_command) = match self.install_kind {
+             InstallKind::Skill => (
+@@ -242,7 +251,7 @@ fn load_toml_skill_package_metadata(
+ 
+     Some(InstallableSkillCapability {
+         name: manifest.skill.name,
+-        source: Some(source.to_string()),
++        source: Ok(source.to_string()),
+         aliases: manifest.skill.aliases,
+         install_kind: InstallKind::Skill,
+     })
+@@ -257,7 +266,7 @@ fn load_markdown_skill_package_metadata(
+     let meta = super::parse_simple_frontmatter(&frontmatter);
+     Some(InstallableSkillCapability {
+         name: meta.name.unwrap_or_else(|| fallback_name.to_string()),
+-        source: Some(source.to_string()),
++        source: Ok(source.to_string()),
+         aliases: Vec::new(),
+         install_kind: InstallKind::Skill,
+     })
+@@ -267,24 +276,14 @@ fn load_markdown_skill_package_metadata(
+ fn load_cached_installable_plugin_capabilities(
+     workspace_dir: &Path,
+ ) -> Vec<InstallableSkillCapability> {
+-    let selected = std::env::var(zeroclaw_plugins::registry::REGISTRY_URL_ENV)
+-        .ok()
+-        .filter(|s| !s.trim().is_empty());
+-    let sources = match selected
+-        .as_deref()
+-        .map(zeroclaw_plugins::registry::registry_sources)
+-        .transpose()
+-    {
+-        Ok(sources) => sources,
+-        Err(_) => return Vec::new(),
+-    };
+-    load_cached_installable_plugin_capabilities_for_sources(workspace_dir, sources.as_deref())
++    let selection = std::env::var(zeroclaw_plugins::registry::REGISTRY_URL_ENV).ok();
++    load_cached_installable_plugin_capabilities_for_selection(workspace_dir, selection.as_deref())
+ }
+ 
+ #[cfg(feature = "plugins-wasm")]
+-fn load_cached_installable_plugin_capabilities_for_sources(
++fn load_cached_installable_plugin_capabilities_for_selection(
+     workspace_dir: &Path,
+-    sources: Option<&[String]>,
++    selection: Option<&str>,
+ ) -> Vec<InstallableSkillCapability> {
+     let index = match read_cached_registry_collection(workspace_dir) {
+         Ok(Some(index)) => index,
+@@ -300,9 +299,7 @@ fn load_cached_installable_plugin_capabilities_for_sources(
+             return Vec::new();
+         }
+     };
+-    if sources
+-        .is_some_and(|sources| !zeroclaw_plugins::registry::cache_matches_sources(&index, sources))
+-    {
++    if !zeroclaw_plugins::registry::cache_matches_selection(&index, selection) {
+         return Vec::new();
+     }
+ 
+@@ -319,7 +316,8 @@ fn load_cached_installable_plugin_capabilities_for_sources(
+                     Some(entry.origin),
+                     None,
+                     false,
+-                ),
++                )
++                .ok_or_else(|| zeroclaw_plugins::registry::registry_origin_label(entry.origin)),
+                 aliases: vec![description],
+                 install_kind: InstallKind::Plugin,
+             }
+@@ -456,7 +454,7 @@ mod tests {
+     fn catalog_entry(name: &str, aliases: &[&str]) -> InstallableSkillCapability {
+         InstallableSkillCapability {
+             name: name.to_string(),
+-            source: Some(name.to_string()),
++            source: Ok(name.to_string()),
+             aliases: aliases.iter().map(|alias| alias.to_string()).collect(),
+             install_kind: InstallKind::Skill,
+         }
+@@ -481,53 +479,40 @@ mod tests {
+ 
+     #[cfg(feature = "plugins-wasm")]
+     #[test]
+-    fn union_cache_suggestions_keep_each_publishers_explicit_install_command() {
++    fn union_cache_suggestions_pin_public_origins_and_withhold_private_commands() {
+         let dir = tempfile::tempdir().unwrap();
+         let catalog_data: zeroclaw_plugins::registry::RegistryCollection = serde_json::from_value(serde_json::json!({
+             "registries": [
+                 {"registry_url":"https://a.invalid/index", "plugins":[{"name":"calendar","version":"1","description":"personal calendar","url":"https://a.invalid/p.zip"}]},
+-                {"registry_url":"https://b.invalid/index", "plugins":[{"name":"calendar","version":"2","description":"team scheduling","url":"https://b.invalid/p.zip"}]}
++                {"registry_url":"https://b.invalid/index?token=sample", "plugins":[{"name":"calendar","version":"2","description":"team scheduling","url":"https://b.invalid/p.zip"}]}
+             ]
+         })).unwrap();
+         zeroclaw_plugins::registry::write_cached_registry_collection(dir.path(), &catalog_data)
+             .unwrap();
+-        let catalog = load_cached_installable_plugin_capabilities(dir.path());
++        for selection in [None, Some("  "), Some("https://a.invalid/index")] {
++            assert!(
++                load_cached_installable_plugin_capabilities_for_selection(dir.path(), selection)
++                    .is_empty()
++            );
++        }
++        let selected = serde_json::to_string(&catalog_data.sources()).unwrap();
++        let catalog =
++            load_cached_installable_plugin_capabilities_for_selection(dir.path(), Some(&selected));
+         assert_eq!(catalog.len(), 2);
++        let public = suggest_missing_skill_install("use personal calendar", &[], &[], &catalog)
++            .unwrap()
++            .render_user_message();
++        assert!(public.contains("calendar@1 --registry https://a.invalid/index"));
++        let private = suggest_missing_skill_install("use team scheduling", &[], &[], &catalog)
++            .unwrap()
++            .render_user_message();
+         assert!(
+-            load_cached_installable_plugin_capabilities_for_sources(
+-                dir.path(),
+-                Some(&["https://a.invalid/index".to_string()])
+-            )
+-            .is_empty()
+-        );
+-        assert!(
+-            load_cached_installable_plugin_capabilities_for_sources(
+-                dir.path(),
+-                Some(&["https://unrelated.invalid/index".to_string()])
+-            )
+-            .is_empty()
+-        );
+-        assert_eq!(
+-            load_cached_installable_plugin_capabilities_for_sources(
+-                dir.path(),
+-                Some(&catalog_data.sources())
+-            )
+-            .len(),
+-            2
++            private.contains(&zeroclaw_plugins::registry::registry_origin_label(
++                "https://b.invalid/index?token=sample"
++            ))
+         );
+-        for (prompt, expected) in [
+-            (
+-                "use personal calendar",
+-                "calendar@1 --registry https://a.invalid/index",
+-            ),
+-            (
+-                "use team scheduling",
+-                "calendar@2 --registry https://b.invalid/index",
+-            ),
+-        ] {
+-            let suggestion = suggest_missing_skill_install(prompt, &[], &[], &catalog).unwrap();
+-            assert!(suggestion.render_user_message().contains(expected));
+-        }
++        assert!(!private.contains("sample"));
++        assert!(!private.contains("--registry"));
+     }
+ 
+     #[cfg(all(windows, feature = "plugins-wasm"))]
+@@ -543,17 +528,19 @@ mod tests {
+             }))
+             .unwrap();
+         zeroclaw_plugins::registry::write_cached_registry_collection(dir.path(), &data).unwrap();
+-        let catalog = load_cached_installable_plugin_capabilities_for_sources(dir.path(), None);
++        let catalog = load_cached_installable_plugin_capabilities_for_selection(
++            dir.path(),
++            data.registries[0].registry_url.as_deref(),
++        );
+         assert_eq!(catalog.len(), 1);
+         assert_eq!(catalog[0].name, "calendar");
+-        assert_eq!(catalog[0].source, None);
++        assert!(catalog[0].source.is_err());
+         let suggestion =
+             suggest_missing_skill_install("use personal calendar", &[], &[], &catalog).unwrap();
+         let message = suggestion.render_user_message();
+-        assert_eq!(
+-            message,
+-            crate::i18n::get_required_cli_string("cli-plugin-registry-command-unavailable")
+-        );
++        assert!(message.contains(&crate::i18n::get_required_cli_string(
++            "cli-plugin-registry-command-unavailable"
++        )));
+         assert!(!message.contains("ZC_REGISTRY_MARKER"));
+         assert!(!message.contains("zeroclaw plugin install"));
+     }
+@@ -651,7 +638,7 @@ mod tests {
+         .expect("missing high-confidence skill should suggest installation");
+ 
+         assert_eq!(suggestion.name, "calendar");
+-        assert_eq!(suggestion.source.as_deref(), Some("calendar"));
++        assert_eq!(suggestion.source.as_deref().ok(), Some("calendar"));
+         assert_eq!(suggestion.matched, "google calendar");
+         assert!(
+             suggestion
+@@ -713,7 +700,7 @@ tags = ["scheduling"]
+ 
+         assert_eq!(catalog.len(), 1);
+         assert_eq!(catalog[0].name, "calendar");
+-        assert_eq!(catalog[0].source.as_deref(), Some("calendar"));
++        assert_eq!(catalog[0].source.as_deref().ok(), Some("calendar"));
+ 
+         let body_only_match = suggest_missing_skill_install(
+             "please use body only secret phrase for this",
+@@ -763,7 +750,7 @@ aliases = ["release check"]
+         );
+ 
+         assert_eq!(catalog.len(), 1);
+-        assert_eq!(catalog[0].source.as_deref(), Some("release-check"));
++        assert_eq!(catalog[0].source.as_deref().ok(), Some("release-check"));
+         assert!(suggestion.is_some());
+     }
+ 
+@@ -830,11 +817,11 @@ aliases = ["team calendar"]
+         assert_eq!(catalog.len(), 1);
+         assert_eq!(catalog[0].name, "team-calendar");
+         assert_eq!(
+-            catalog[0].source.as_deref(),
++            catalog[0].source.as_deref().ok(),
+             Some("registry:acme/team-calendar")
+         );
+         assert_eq!(
+-            suggestion.source.as_deref(),
++            suggestion.source.as_deref().ok(),
+             Some("registry:acme/team-calendar")
+         );
+         assert!(
+@@ -854,7 +841,7 @@ aliases = ["team calendar"]
+             registry_dir.join("registry.json"),
+             r#"
+ {
+-  "registry_url": "https://example.invalid/registry.json",
++  "registry_url": "https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw-plugins/main/registry.json",
+   "plugins": [
+     {
+       "name": "team-calendar",
+@@ -882,7 +869,7 @@ aliases = ["team calendar"]
+         assert!(suggestion.contains("team-calendar"));
+         assert!(suggestion.contains("team calendar"));
+         assert!(suggestion.contains(
+-            "zeroclaw plugin install team-calendar@0.2.0 --registry https://example.invalid/registry.json"
++            "zeroclaw plugin install team-calendar@0.2.0 --registry https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw-plugins/main/registry.json"
+         ));
+     }
+ 
+@@ -908,6 +895,7 @@ aliases = ["team calendar"]
+             registry_dir.join("registry.json"),
+             r#"
+ {
++  "registry_url": "https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw-plugins/main/registry.json",
+   "plugins": [
+     {
+       "name": "team-calendar-plugin",
+@@ -946,6 +934,7 @@ aliases = ["team calendar"]
+             registry_dir.join("registry.json"),
+             r#"
+ {
++  "registry_url": "https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw-plugins/main/registry.json",
+   "plugins": [
+     {
+       "name": "team-calendar",
+diff --git a/docs/book/src/plugins/distributing-plugins.md b/docs/book/src/plugins/distributing-plugins.md
+index e80b0daab3f4dad2f4981405388369ba754093ea..8cb28073a50c6203d020a32a84cc9d65cd104a97 100644
+--- a/docs/book/src/plugins/distributing-plugins.md
++++ b/docs/book/src/plugins/distributing-plugins.md
+@@ -190,7 +190,7 @@ HTTP(S) URLs. Exact duplicates are removed in configuration order, and commas
+ inside URLs remain part of the URL. Every source is validated before HTTP.
+ 
+ All indexes must succeed before search results or the canonical local cache
+-are published. A failed, malformed or timed-out source reports its URL, leaves
++are published. A failed, malformed or timed-out source identifies the source (an opaque ID for private URLs), leaves
+ the previous cache intact, and prevents archive downloads. Each index is capped
+ at 4 MiB and uses the existing request deadlines; at most eight indexes are
+ fetched sequentially. An unpopulated public index still reports the existing
+@@ -214,19 +214,21 @@ union caches contain a collection of per-origin legacy indexes, including empty
+ ones, without changing public entry fields or duplicating provenance on entries.
+ Legacy single-index helpers refuse a union rather than flattening publishers.
+ Publication uses an owner-only same-directory staged file and rename; restrictive
+-existing Unix cache permissions are not widened. Offline
+-consumers reject a cache from a different explicitly configured environment
+-source set. Without an environment selection they retain the last deliberately
+-refreshed cache, including a previous `--registry` search. Suggested commands
+-include each entry's explicit origin rather than passing a JSON array as a URL,
+-quoted at the host-aware POSIX/Windows/PowerShell command-rendering boundary.
+-A copy-ready Windows install recipe is unavailable if any argument cannot be
+-passed literally in both cmd.exe and PowerShell, such as a percent-encoded URL
+-or a config path containing a literal percent sign. This does not invalidate
+-registry metadata or disable structured installation.
+-Successful search and Quickstart labels never print URL userinfo, query or
+-fragment bytes; distinct raw URLs retain distinct opaque IDs. This does not
+-claim redaction of existing error or executable-command surfaces.
++existing Unix cache permissions are not widened. Offline CLI and gateway catalogs
++and install suggestions use a cache only if its complete, stamped source set
++matches the current selection. With an unset or blank environment variable,
++only the public default matches. After a one-off private search, refresh the
++default registry to see its entries again. An old index without a recorded
++origin must be refreshed; it is not assumed to be public.
++
++For a public URL, a suggested command pins the exact origin. If the URL
++contains userinfo, a query or a fragment, no copy-ready command is offered.
++The opaque registry ID identifies the source; it is **not** a `--registry`
++value. Supply the original URL separately for a structured install or update.
++On Windows no registry recipe is offered if any argument cannot be passed
++literally in both cmd.exe and PowerShell, including a percent-encoded URL or
++a config path containing a percent sign. Neither restriction changes which
++registries can be fetched or what authority an update must obtain.
+ The authenticated catalog API distinguishes publishers with opaque registry
+ IDs instead of exposing custom URLs that might contain credentials.
+ 
+diff --git a/docs/book/src/plugins/index.md b/docs/book/src/plugins/index.md
+index 4da1db1da40fdb78af9cd5026dcbfe5c28336884..9d7985fed4ccf00add9b8216101da4a939b903f5 100644
+--- a/docs/book/src/plugins/index.md
++++ b/docs/book/src/plugins/index.md
+@@ -577,10 +577,11 @@ doubled (`''`). This legacy marker is advisory, not an execution guard: PowerShe
+ it as a comment, but cmd.exe does not, and separators later in the line may
+ execute. Do not paste a marked PowerShell line into cmd.exe; use only the
+ command after the marker in a known PowerShell session. Copy-ready registry
+-install commands do not use this fallback: when any argument is outside the
++install and update commands do not use this fallback: when any argument is outside the
+ shared Windows literal subset (including control characters), the install
+ recipe is unavailable. The registry entry and structured installation remain
+-available. Ordinary spaces and URL query ampersands are still supported.
++available. Origins with userinfo, queries, or fragments are not included in
++copy-ready commands on any platform.
+ 
+ `zeroclaw plugin list` repeats the same comparison as a standing diagnostic,
+ one instance at a time, for every installed plugin holding `http_client`,
+diff --git a/src/main.rs b/src/main.rs
+index 9d155bbb932079ecce5f72a22862927633b86911..122262fc1997aece841907e2a8e114bb842731ad 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -3649,7 +3649,10 @@ fn with_update_pointer(
+     let zeroclaw::plugins::error::PluginError::AlreadyLoaded(name) = &error else {
+         return error.into();
+     };
+-    let command = crate::plugins::update::update_command(config_dir, name, source, &[]);
++    let Some(command) = crate::plugins::update::update_command(config_dir, name, source, &[])
++    else {
++        return anyhow::Error::from(error).context(plugin_command_unavailable());
++    };
+     let pointer = ta(
+         "cli-plugin-install-already-installed",
+         &[("name", name.as_str()), ("command", command.as_str())],
+@@ -6388,11 +6391,11 @@ enum PluginUpdateOutcome {
+     NeedsApproval {
+         version: String,
+         items: Vec<String>,
+-        command: String,
++        command: Option<String>,
+     },
+     /// No package of that name is installed. `install` is the command that
+     /// installs it from the source the update named.
+-    NotInstalled { install: String },
++    NotInstalled { install: Option<String> },
+     /// The installed package was not replaced. `kept` is its version, when
+     /// one is installed. Config rows created for the replacement, and a
+     /// displaced copy recovery put back, stay as they are.
+@@ -6410,7 +6413,7 @@ enum PluginUpdateOutcome {
+     Interrupted {
+         error: String,
+         preserved: std::path::PathBuf,
+-        command: String,
++        command: Option<String>,
+     },
+ }
+ 
+@@ -6732,6 +6735,14 @@ fn recover_before_update(
+     }
+ }
+ 
++#[cfg(feature = "plugins-wasm")]
++fn plugin_command_unavailable() -> String {
++    t(
++        "cli-plugin-command-unavailable",
++        "No copy-ready command is available. Supply the original arguments separately for the intended source.",
++    )
++}
++
+ /// The note `plugin list` and `plugin update --all` print for a package an
+ /// interrupted update left displaced, with both commands from
+ /// [`plugin_displaced_commands`].
+@@ -6744,6 +6755,13 @@ fn plugin_displaced_note(
+     let (command, local) =
+         plugin_displaced_commands(egress_command_config_dir(config), name, registry);
+     let name = crate::plugins::update::printable(name);
++    let (Some(command), Some(local)) = (command, local) else {
++        return ta(
++            "cli-plugin-displaced-command-unavailable",
++            &[("name", &name)],
++            "Displaced package; no copy-ready recovery command.",
++        );
++    };
+     ta(
+         "cli-plugin-list-displaced",
+         &[("name", &name), ("command", &command), ("local", &local)],
+@@ -6764,7 +6782,7 @@ fn plugin_displaced_commands(
+     config_dir: &std::path::Path,
+     name: &str,
+     registry: Option<&str>,
+-) -> (String, String) {
++) -> (Option<String>, Option<String>) {
+     use crate::plugins::update::{UpdateSource, update_command};
+ 
+     (
+@@ -7229,6 +7247,10 @@ fn plugin_update_outcome_text(name: &str, outcome: &PluginUpdateOutcome) -> Vec<
+                     )
+                 ));
+             }
++            let Some(command) = command else {
++                lines.push(plugin_command_unavailable());
++                return lines;
++            };
+             lines.push(ta(
+                 "cli-plugin-update-approval-command",
+                 &[("command", command)],
+@@ -7236,7 +7258,14 @@ fn plugin_update_outcome_text(name: &str, outcome: &PluginUpdateOutcome) -> Vec<
+             ));
+             lines
+         }
+-        PluginUpdateOutcome::NotInstalled { install } => vec![ta(
++        PluginUpdateOutcome::NotInstalled { install: None } => vec![ta(
++            "cli-plugin-not-installed-command-unavailable",
++            &[("name", name)],
++            "Package not installed; no copy-ready install command.",
++        )],
++        PluginUpdateOutcome::NotInstalled {
++            install: Some(install),
++        } => vec![ta(
+             "cli-plugin-update-not-installed",
+             &[("name", name), ("command", install)],
+             format!("Could not update '{name}': it is not installed. Install it with: {install}"),
+@@ -7271,6 +7300,13 @@ fn plugin_update_outcome_text(name: &str, outcome: &PluginUpdateOutcome) -> Vec<
+             command,
+         } => {
+             let preserved = preserved.display().to_string();
++            let Some(command) = command else {
++                return vec![ta(
++                    "cli-plugin-interrupted-command-unavailable",
++                    &[("name", name), ("error", error), ("preserved", &preserved)],
++                    "Interrupted update; no copy-ready recovery command.",
++                )];
++            };
+             vec![ta(
+                 "cli-plugin-update-interrupted",
+                 &[
+@@ -27591,6 +27627,7 @@ hosts = ["api.example.com", "api2.example.com"]
+             },
+             &increase,
+         );
++        let command = command.unwrap();
+         // The shell only tokenizes these synthetic literals into positional
+         // arguments; it never runs the rendered zeroclaw command.
+         let out = std::process::Command::new("/bin/sh")
+@@ -27679,7 +27716,7 @@ hosts = ["api.example.com", "api2.example.com"]
+                     url: "http://127.0.0.1:9/never-downloaded.zip".to_string(),
+                     sha256: None,
+                 }],
+-                registry_url: None,
++                registry_url: Some(plugin_registry::DEFAULT_REGISTRY_URL.into()),
+             },
+         )
+     }
+@@ -27738,6 +27775,7 @@ hosts = ["api.example.com", "api2.example.com"]
+             panic!("expected NeedsApproval, got {outcome:?}");
+         };
+         assert_eq!(version, "2.0.0");
++        let command = command.unwrap();
+         assert_eq!(items, ["permission:http_client"]);
+         for part in [
+             "plugin update",
+@@ -28281,7 +28319,7 @@ type = "integer"
+             &PluginUpdateOutcome::NeedsApproval {
+                 version: "2.0.0\u{1b}[2K".to_string(),
+                 items: vec!["provides:tele\u{1b}[8mgram".to_string()],
+-                command: "zeroclaw plugin update 'weather@2.0.0\u{1b}[2K'".to_string(),
++                command: Some("zeroclaw plugin update 'weather@2.0.0\u{1b}[2K'".to_string()),
+             },
+         );
+         assert!(
+@@ -28306,7 +28344,7 @@ type = "integer"
+                     "permission:http_client".to_string(),
+                     "capability:channel".to_string(),
+                 ],
+-                command: command.to_string(),
++                command: Some(command.to_string()),
+             },
+         );
+         assert_eq!(lines.len(), 4, "{lines:#?}");
+@@ -28364,6 +28402,7 @@ type = "integer"
+         let registry = "https://registry.example/i.json";
+         let (command, local) =
+             plugin_displaced_commands(config_dir.path(), "weather", Some(registry));
++        let (command, local) = (command.unwrap(), local.unwrap());
+ 
+         assert!(
+             command.contains("--registry") && !command.contains("--from"),
+@@ -28472,6 +28511,7 @@ type = "integer"
+             },
+         );
+ 
++        let command = command.unwrap();
+         assert_eq!(lines.len(), 1, "{lines:#?}");
+         assert!(
+             lines[0].contains(
+diff --git a/src/plugin_catalog.rs b/src/plugin_catalog.rs
+index 2a4987d8f8df7fe626a681750f2eccc1c61eba50..9f6abd3a18b8fc6bbad70afd45c16fac4e425a57 100644
+--- a/src/plugin_catalog.rs
++++ b/src/plugin_catalog.rs
+@@ -98,7 +98,18 @@ fn render(entries: &[PluginCatalogEntry<'_>], config_dir: &std::path::Path) {
+                     "cli-plugin-registry-command",
+                     &[("command", &command)],
+                 ),
+-                None => get_required_cli_string("cli-plugin-registry-command-unavailable"),
++                None => {
++                    let notice = get_required_cli_string("cli-plugin-registry-command-unavailable");
++                    entry.origin.map_or_else(
++                        || notice.clone(),
++                        |origin| {
++                            format!(
++                                "{}: {notice}",
++                                zeroclaw::plugins::registry::registry_origin_label(origin)
++                            )
++                        },
++                    )
++                }
+             };
+             println!("{hint}");
+         }
+diff --git a/src/plugin_registry.rs b/src/plugin_registry.rs
+index cc68dc86f328cec57d535407776e29b4b0300618..642e464d1a650cec3b646d03fd79565c408767da 100644
+--- a/src/plugin_registry.rs
++++ b/src/plugin_registry.rs
+@@ -8,8 +8,9 @@ use tempfile::TempDir;
+ use zeroclaw::plugins::PluginManifest;
+ pub(crate) use zeroclaw::plugins::registry::search_registry_entries as search_entries;
+ use zeroclaw::plugins::registry::{
+-    PluginRegistryEntry, PluginRegistryIndex, RegistryCollection, parse_plugin_spec,
+-    resolve_registry_entry, write_cached_registry_collection,
++    PluginRegistryEntry, PluginRegistryIndex, RegistryCollection, effective_registry_selection,
++    parse_plugin_spec, registry_origin_label, registry_url_is_private, resolve_registry_entry,
++    write_cached_registry_collection,
+ };
+ 
+ pub(crate) use zeroclaw::plugins::registry::DEFAULT_REGISTRY_URL;
+@@ -55,18 +56,25 @@ pub(crate) fn registry_url(override_url: Option<&str>) -> Result<String> {
+ }
+ 
+ fn select_registry_url(override_url: Option<&str>, environment: Option<&str>) -> Result<String> {
+-    let value = override_url
+-        .filter(|url| !url.trim().is_empty())
+-        .map(ToOwned::to_owned)
+-        .or_else(|| environment.map(ToOwned::to_owned))
+-        .filter(|url| !url.trim().is_empty())
+-        .unwrap_or_else(|| DEFAULT_REGISTRY_URL.to_string());
++    let value = effective_registry_selection(
++        override_url
++            .filter(|url| !url.trim().is_empty())
++            .or(environment),
++    );
+     // Explicit overrides must be exactly one URL, regardless of the environment.
+     if override_url.is_some_and(|s| !s.trim().is_empty()) && value.trim_start().starts_with('[') {
+         bail!("--registry expects one HTTP(S) URL");
+     }
+-    validate_registry_sources(&value)?;
+-    Ok(value)
++    validate_registry_sources(value)?;
++    Ok(value.to_owned())
++}
++
++fn display_url(url: &str) -> std::borrow::Cow<'_, str> {
++    if registry_url_is_private(url) {
++        registry_origin_label(url).into()
++    } else {
++        url.into()
++    }
+ }
+ 
+ fn validate_registry_sources(value: &str) -> Result<Vec<String>> {
+@@ -74,9 +82,12 @@ fn validate_registry_sources(value: &str) -> Result<Vec<String>> {
+     // Validate every URL before the first network request.
+     for source in &sources {
+         let url = reqwest::Url::parse(source)
+-            .with_context(|| format!("invalid plugin registry URL {source}"))?;
++            .with_context(|| format!("invalid plugin registry URL {}", display_url(source)))?;
+         if url.host_str().is_none() || !matches!(url.scheme(), "http" | "https") {
+-            bail!("plugin registry must be an HTTP(S) URL: {source}");
++            bail!(
++                "plugin registry must be an HTTP(S) URL: {}",
++                display_url(source)
++            );
+         }
+     }
+     Ok(sources)
+@@ -210,7 +221,7 @@ impl RegistryClient {
+         // Publish/cache nothing until the complete configured set succeeds.
+         for source in sources {
+             let index = self.fetch_single_index(&source).await.map_err(|error| {
+-                let message = format!("fetching plugin registry {source}: {error}");
++                let message = format!("fetching plugin registry {}: {error}", display_url(&source));
+                 error.context(message)
+             })?;
+             combined.registries.push(index);
+@@ -225,13 +236,17 @@ impl RegistryClient {
+             .timeout(self.timeouts.index)
+             .send()
+             .await
+-            .with_context(|| format!("fetching plugin registry {registry_url}"))?;
++            .map_err(reqwest::Error::without_url)
++            .context("requesting plugin registry")?;
+         let status = response.status();
+         if !status.is_success() {
+             if status == reqwest::StatusCode::NOT_FOUND && registry_url == DEFAULT_REGISTRY_URL {
+                 return Err(DefaultRegistryUnpopulated.into());
+             }
+-            bail!("plugin registry returned HTTP {status} for {registry_url}");
++            bail!(
++                "plugin registry returned HTTP {status} for {}",
++                display_url(registry_url)
++            );
+         }
+         const MAX_INDEX_BYTES: usize = 4 * 1024 * 1024;
+         if response
+@@ -244,6 +259,7 @@ impl RegistryClient {
+         while let Some(chunk) = response
+             .chunk()
+             .await
++            .map_err(reqwest::Error::without_url)
+             .context("reading plugin registry index")?
+         {
+             if bytes.len().saturating_add(chunk.len()) > MAX_INDEX_BYTES {
+@@ -286,10 +302,14 @@ impl RegistryClient {
+             .timeout(self.timeouts.archive)
+             .send()
+             .await
+-            .with_context(|| format!("downloading plugin archive {url}"))?;
++            .map_err(reqwest::Error::without_url)
++            .with_context(|| format!("downloading plugin archive {}", display_url(url)))?;
+         let status = response.status();
+         if !status.is_success() {
+-            bail!("plugin archive returned HTTP {status} for {url}");
++            bail!(
++                "plugin archive returned HTTP {status} for {}",
++                display_url(url)
++            );
+         }
+         if let Some(len) = response.content_length()
+             && len > MAX_PLUGIN_ZIP_BYTES as u64
+@@ -301,6 +321,7 @@ impl RegistryClient {
+         while let Some(chunk) = response
+             .chunk()
+             .await
++            .map_err(reqwest::Error::without_url)
+             .context("reading plugin archive response body")?
+         {
+             append_chunk_capped(&mut bytes, &chunk, MAX_PLUGIN_ZIP_BYTES)?;
+@@ -957,6 +978,23 @@ capabilities = ["tool"]
+         );
+     }
+ 
++    #[tokio::test]
++    async fn private_registry_error_reports_status_and_label_not_url() {
++        let server = MockServer::start().await;
++        Mock::given(method("GET"))
++            .and(path("/index"))
++            .respond_with(ResponseTemplate::new(403))
++            .expect(1)
++            .mount(&server)
++            .await;
++        let url = format!("{}/index?sample=private-fixture", server.uri());
++        let error = fetch_registry_index(&url).await.unwrap_err();
++        let message = format!("{error:#}");
++        assert!(message.contains("403") && message.contains(&registry_origin_label(&url)));
++        assert!(!message.contains("private-fixture"));
++        server.verify().await;
++    }
++
+     #[tokio::test]
+     async fn registry_index_server_error_reports_the_status() {
+         let server = MockServer::start().await;
+diff --git a/src/plugins/update.rs b/src/plugins/update.rs
+index f4c3c2ff79891b9378b63cd2bd7147ec7c149b48..22676d9663ca3516676785e58317cef894b2cfd5 100644
+--- a/src/plugins/update.rs
++++ b/src/plugins/update.rs
+@@ -194,32 +194,29 @@ pub enum UpdateSource<'a> {
+ /// The `plugin update` command for `name` from `source`, accepting
+ /// `increase` with repeated `--allow-token` arguments when it is not empty,
+ /// quoted for this host's shell like every other printed command.
+-#[must_use]
+ pub fn update_command(
+     config_dir: &Path,
+     name: &str,
+     source: UpdateSource<'_>,
+     increase: &[AuthorityItem],
+-) -> String {
++) -> Option<String> {
+     update_command_for(ShellDialect::host(), config_dir, name, source, increase)
+ }
+ 
+ /// The `plugin install` command for `name` from `source`: the local
+ /// directory, or the registry entry, pinned when there is a version, quoted
+ /// like every other printed command.
+-#[must_use]
+-pub fn install_command(config_dir: &Path, name: &str, source: UpdateSource<'_>) -> String {
++pub fn install_command(config_dir: &Path, name: &str, source: UpdateSource<'_>) -> Option<String> {
+     install_command_for(ShellDialect::host(), config_dir, name, source)
+ }
+ 
+ /// [`install_command`] rendered for an explicit shell dialect.
+-#[must_use]
+ pub fn install_command_for(
+     dialect: ShellDialect,
+     config_dir: &Path,
+     name: &str,
+     source: UpdateSource<'_>,
+-) -> String {
++) -> Option<String> {
+     let (target, registry) = match source {
+         UpdateSource::Local(dir) => (dir.to_string_lossy().into_owned(), None),
+         UpdateSource::Registry { version, registry } => (
+@@ -232,31 +229,32 @@ pub fn install_command_for(
+     if let Some(url) = registry {
+         values.push(url);
+     }
+-    let (dialect, marker) = dialect.command_form(&values);
++    if !zeroclaw_plugins::registry::registry_command_available(dialect, registry, &values) {
++        return None;
++    }
+     let registry = registry
+         .map(|url| format!(" --registry {}", dialect.quote_literal(url)))
+         .unwrap_or_default();
+-    format!(
+-        "{marker}{} plugin install {}{registry}",
++    Some(format!(
++        "{} plugin install {}{registry}",
+         zeroclaw_invocation_for(dialect, config_dir),
+         dialect.quote_literal(&target),
+-    )
++    ))
+ }
+ 
+ /// [`update_command`] rendered for an explicit shell dialect.
+ ///
+ /// The version, a `provides` id and a publisher key come from the replacement's
+ /// manifest, which is publisher-controlled text, so every value is one quoted
+-/// literal argument, and a line no Windows form can pass literally is rendered
+-/// as the marked PowerShell form, as the egress commands are.
+-#[must_use]
++/// literal argument, and a private origin or a line no Windows form can pass literally
++/// has no copy-ready command.
+ pub fn update_command_for(
+     dialect: ShellDialect,
+     config_dir: &Path,
+     name: &str,
+     source: UpdateSource<'_>,
+     increase: &[AuthorityItem],
+-) -> String {
++) -> Option<String> {
+     let allowed = increase
+         .iter()
+         .map(AuthorityItem::token)
+@@ -283,7 +281,13 @@ pub fn update_command_for(
+     if let Some((_, value)) = &origin {
+         values.push(value.as_str());
+     }
+-    let (dialect, marker) = dialect.command_form(&values);
++    let registry = match source {
++        UpdateSource::Registry { registry, .. } => registry,
++        UpdateSource::Local(_) => None,
++    };
++    if !zeroclaw_plugins::registry::registry_command_available(dialect, registry, &values) {
++        return None;
++    }
+     let origin = origin
+         .map(|(flag, value)| format!(" {flag} {}", dialect.quote_literal(&value)))
+         .unwrap_or_default();
+@@ -294,17 +298,16 @@ pub fn update_command_for(
+         allow.push_str(" --allow-token ");
+         allow.push_str(&dialect.quote_literal(token));
+     }
+-    format!(
+-        "{marker}{} plugin update {}{origin}{allow}",
++    Some(format!(
++        "{} plugin update {}{origin}{allow}",
+         zeroclaw_invocation_for(dialect, config_dir),
+         dialect.quote_literal(&target),
+-    )
++    ))
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-    use crate::plugins::egress_ceremony::POWERSHELL_ONLY_MARKER;
+ 
+     fn manifest(extra: &str) -> PluginManifest {
+         toml::from_str(&format!(
+@@ -444,7 +447,8 @@ mod tests {
+                 registry: Some("https://registry.example.com/index.json"),
+             },
+             &increase,
+-        );
++        )
++        .unwrap();
+ 
+         assert_eq!(
+             command,
+@@ -463,7 +467,8 @@ mod tests {
+             "weather",
+             UpdateSource::Local(Path::new("/work/weather-plugin")),
+             &[AuthorityItem::Capability(PluginCapability::Channel)],
+-        );
++        )
++        .unwrap();
+ 
+         assert_eq!(
+             command,
+@@ -483,7 +488,8 @@ mod tests {
+                 registry: None,
+             },
+             &[],
+-        );
++        )
++        .unwrap();
+         assert_eq!(
+             registry,
+             "zeroclaw --config-dir '/cfg' plugin update 'weather'"
+@@ -495,7 +501,8 @@ mod tests {
+             "weather",
+             UpdateSource::Local(Path::new("/work/weather-plugin")),
+             &[],
+-        );
++        )
++        .unwrap();
+         assert_eq!(
+             local,
+             "zeroclaw --config-dir '/cfg' plugin update 'weather' --from '/work/weather-plugin'"
+@@ -540,7 +547,8 @@ mod tests {
+             Path::new("/cfg"),
+             "weather",
+             UpdateSource::Local(Path::new("/work/weather-plugin")),
+-        );
++        )
++        .unwrap();
+         assert_eq!(
+             local,
+             "zeroclaw --config-dir '/cfg' plugin install '/work/weather-plugin'"
+@@ -554,7 +562,8 @@ mod tests {
+                 version: Some("1.2.0"),
+                 registry: Some("https://registry.example.com/index.json"),
+             },
+-        );
++        )
++        .unwrap();
+         assert_eq!(
+             pinned,
+             "zeroclaw --config-dir '/cfg' plugin install 'weather@1.2.0' --registry 'https://registry.example.com/index.json'"
+@@ -572,7 +581,8 @@ mod tests {
+                 registry: None,
+             },
+             &[AuthorityItem::Permission(PluginPermission::StateRead)],
+-        );
++        )
++        .unwrap();
+ 
+         assert!(!command.contains("--registry"), "{command}");
+         assert!(
+@@ -582,31 +592,45 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn a_value_windows_cannot_pass_literally_gets_the_marked_powershell_form() {
+-        let plain = update_command_for(
+-            ShellDialect::Windows,
+-            Path::new(r"C:\zeroclaw"),
+-            "weather",
+-            UpdateSource::Registry {
+-                version: Some("2.0.0"),
+-                registry: None,
+-            },
+-            &[AuthorityItem::Permission(PluginPermission::HttpClient)],
++    fn registry_approval_and_install_refuse_unprintable_commands() {
++        let dir = Path::new(r"C:\zeroclaw");
++        let increase = [AuthorityItem::Permission(PluginPermission::HttpClient)];
++        for (dialect, url) in [
++            (
++                ShellDialect::Windows,
++                "https://registry.invalid/team%20calendar",
++            ),
++            (
++                ShellDialect::Posix,
++                "https://registry.invalid/index?channel=sample",
++            ),
++        ] {
++            let source = UpdateSource::Registry {
++                version: Some("2.0&preview"),
++                registry: Some(url),
++            };
++            assert_eq!(
++                update_command_for(dialect, dir, "calendar", source, &increase),
++                None
++            );
++            assert_eq!(install_command_for(dialect, dir, "calendar", source), None);
++        }
++        let source = UpdateSource::Registry {
++            version: Some("2"),
++            registry: Some("https://registry.invalid/index"),
++        };
++        assert!(
++            update_command_for(ShellDialect::Windows, dir, "calendar", source, &increase).is_some()
+         );
+-        assert!(!plain.starts_with(POWERSHELL_ONLY_MARKER), "{plain}");
+-        assert!(plain.contains("\"weather@2.0.0\""), "{plain}");
+-
+-        let hostile = update_command_for(
+-            ShellDialect::Windows,
+-            Path::new(r"C:\zeroclaw"),
+-            "weather",
+-            UpdateSource::Registry {
+-                version: Some("2.0.0"),
+-                registry: None,
+-            },
+-            &[AuthorityItem::Provides("%PATH%".to_string())],
++        assert!(
++            update_command_for(
++                ShellDialect::Windows,
++                dir,
++                "calendar",
++                source,
++                &[AuthorityItem::Provides("100%".into())]
++            )
++            .is_none()
+         );
+-        assert!(hostile.starts_with(POWERSHELL_ONLY_MARKER), "{hostile}");
+-        assert!(hostile.contains("'provides:%PATH%'"), "{hostile}");
+     }
+ }
+diff --git a/src/quickstart_plugins/mod.rs b/src/quickstart_plugins/mod.rs
+index 5525bc67fe827477014ce3433ec2c06ea174d221..5d8136af0db3cd5f6aac45fe81112e5ca46740d1 100644
+--- a/src/quickstart_plugins/mod.rs
++++ b/src/quickstart_plugins/mod.rs
+@@ -1519,6 +1519,21 @@ async fn install_one<P: QuickstartPrompter>(
+                 ],
+             )));
+         } else {
++            let display_name = choice.registry_origin.as_deref().map_or_else(
++                || display_name.clone(),
++                |origin| {
++                    qta(
++                        "cli-plugin-registry-origin",
++                        &[
++                            ("name", &display_name),
++                            (
++                                "origin",
++                                &zeroclaw::plugins::registry::registry_origin_label(origin),
++                            ),
++                        ],
++                    )
++                },
++            );
+             prompter.say(&indented(&qta(
+                 "cli-quickstart-plugins-load-check-command-unavailable",
+                 &[
+@@ -4060,7 +4075,7 @@ permissions = ["http_client"]
+         let mut workspace = Workspace::new();
+         workspace.config.plugins.limits.max_instances = 1;
+         let mut picked = selection(fixture_entry(&server, Some(archive_digest())));
+-        let origin = format!("{}{INDEX_PATH}?channel=stable&team=one", server.uri());
++        let origin = format!("{}{INDEX_PATH}", server.uri());
+         picked[0].registry_origin = Some(origin.clone());
+         let mut prompter = ScriptedPrompter::new([]);
+         let phase = run(&mut workspace, &picked, &mut prompter).await.unwrap();
+@@ -4086,6 +4101,32 @@ permissions = ["http_client"]
+         server.verify().await;
+     }
+ 
++    #[tokio::test]
++    async fn private_origin_load_failure_identifies_source_without_a_retry_recipe() {
++        let server = MockServer::start().await;
++        serve_valid_archive(&server, 1).await;
++        let mut workspace = Workspace::new();
++        workspace.config.plugins.limits.max_instances = 1;
++        let mut picked = selection(fixture_entry(&server, Some(archive_digest())));
++        let origin = "https://registry.invalid/index?channel=sample-private";
++        picked[0].registry_origin = Some(origin.into());
++        let mut prompter = ScriptedPrompter::new([]);
++        let phase = run(&mut workspace, &picked, &mut prompter).await.unwrap();
++        assert!(matches!(
++            phase.outcomes[0],
++            PackageOutcome::Failed {
++                stage: FailureStage::LoadCheck,
++                ..
++            }
++        ));
++        let output = prompter.output();
++        assert!(output.contains(&zeroclaw::plugins::registry::registry_origin_label(origin)));
++        assert!(!output.contains("sample-private"));
++        assert!(!output.contains("--no-verify"));
++        assert!(workspace.installed_packages().is_empty());
++        server.verify().await;
++    }
++
+     #[cfg(windows)]
+     #[tokio::test]
+     async fn windows_load_failure_retains_failure_without_unsafe_registry_retry() {
+diff --git a/tests/component/plugin_registry_windows_cli.rs b/tests/component/plugin_registry_windows_cli.rs
+index 44f2085d1d290280a1777d3e6176a0ab0af63ebe..d0c2e70bf060b61e0e26098cb750e9bc0b6ec928 100644
+--- a/tests/component/plugin_registry_windows_cli.rs
++++ b/tests/component/plugin_registry_windows_cli.rs
+@@ -15,7 +15,7 @@ fn windows_plugin_list_reports_unavailable_recipe_without_hiding_metadata() {
+         "schema_version = 3\nlocale = \"en\"\n",
+     )
+     .unwrap();
+-    let origin = "https://registry.invalid/index?team=100%20one&channel=stable";
++    let origin = "https://registry.invalid/index/100%20team";
+     let index = PluginRegistryIndex {
+         registry_url: Some(origin.into()),
+         plugins: vec![PluginRegistryEntry {
+@@ -31,7 +31,7 @@ fn windows_plugin_list_reports_unavailable_recipe_without_hiding_metadata() {
+     write_cached_registry_index(&data, origin, &index).unwrap();
+     let output = Command::new(env!("CARGO_BIN_EXE_zeroclaw"))
+         .env("ZEROCLAW_CONFIG_DIR", dir.path())
+-        .env_remove("ZEROCLAW_PLUGIN_REGISTRY_URL")
++        .env("ZEROCLAW_PLUGIN_REGISTRY_URL", origin)
+         .env("LANG", "en")
+         .env("LC_ALL", "C")
+         .args(["plugin", "list"])
+diff --git a/tests/component/plugin_update_cli.rs b/tests/component/plugin_update_cli.rs
+index b3e062a2247fe66bb205c2faf69987a08c990ada..e4765935ecf0b63d1c4cb22b76aefe49c09743d7 100644
+--- a/tests/component/plugin_update_cli.rs
++++ b/tests/component/plugin_update_cli.rs
+@@ -169,6 +169,16 @@ fn package_archive(manifest: &str, component: &[u8]) -> Vec<u8> {
+ /// `archive`, with its digest. `downloads` is how many times the archive must
+ /// be fetched, checked when the server drops.
+ async fn serve_registry(server: &MockServer, version: &str, archive: Vec<u8>, downloads: u64) {
++    serve_registry_at(server, "/registry.json", version, archive, downloads).await;
++}
++
++async fn serve_registry_at(
++    server: &MockServer,
++    index_path: &str,
++    version: &str,
++    archive: Vec<u8>,
++    downloads: u64,
++) {
+     let archive_path = format!("/{PACKAGE}-{version}.zip");
+     let index = serde_json::json!({
+         "plugins": [{
+@@ -180,7 +190,7 @@ async fn serve_registry(server: &MockServer, version: &str, archive: Vec<u8>, do
+         }],
+     });
+     Mock::given(method("GET"))
+-        .and(path("/registry.json"))
++        .and(path(index_path))
+         .respond_with(ResponseTemplate::new(200).set_body_json(index))
+         .mount(server)
+         .await;
+@@ -334,6 +344,47 @@ async fn approval_from_environment_selected_origin_pins_that_origin_in_the_real_
+     assert!(installed_manifest(config_dir.path()).contains("version = \"1.0.0\""));
+ }
+ 
++#[tokio::test]
++async fn approval_withholds_non_copyable_registry_command_and_keeps_installed_version() {
++    let server = MockServer::start().await;
++    // On Windows, even a non-private origin can have no common literal form.
++    let index_path = if cfg!(windows) {
++        "/team%20calendar/index"
++    } else {
++        "/index"
++    };
++    let version = "2.0&preview";
++    let archive = package_archive(
++        &manifest(version, "permissions = [\"state_read\"]\n"),
++        &std::fs::read(fixture()).unwrap(),
++    );
++    serve_registry_at(&server, index_path, version, archive, 1).await;
++    let query = if cfg!(windows) {
++        ""
++    } else {
++        "?channel=private-fixture"
++    };
++    let origin = format!("{}{index_path}{query}", server.uri());
++    let config_dir = config_dir_with_installed_fixture();
++    let output = run_plugin_with_registries(config_dir.path(), &origin, &["update", PACKAGE]);
++    let text = combined(&output);
++    assert!(!output.status.success());
++    assert!(
++        text.contains(version) && text.contains("permission:state_read"),
++        "{text}"
++    );
++    assert!(
++        !text.contains("--allow-token") && !text.contains("# PowerShell only"),
++        "{text}"
++    );
++    assert!(
++        !text.contains(&origin) && !text.contains("private-fixture"),
++        "{text}"
++    );
++    assert!(installed_manifest(config_dir.path()).contains("version = \"1.0.0\""));
++    server.verify().await;
++}
++
+ #[tokio::test]
+ async fn successful_union_search_shows_distinct_private_origin_labels_not_credentials() {
+     let server = MockServer::start().await;
+@@ -362,6 +413,18 @@ async fn successful_union_search_shows_distinct_private_origin_labels_not_creden
+     for secret in ["alice", "password", "token=", "secret-", "private-"] {
+         assert!(!text.contains(secret), "{text}");
+     }
++    let cached = run_plugin_with_registries(config_dir.path(), &selection, &["list"]);
++    let catalog = combined(&cached);
++    assert!(cached.status.success(), "{catalog}");
++    for origin in [&first, &second] {
++        assert!(catalog.contains(&zeroclaw_plugins::registry::registry_origin_label(origin)));
++    }
++    assert!(!catalog.contains("token=") && !catalog.contains("password-"));
++    let default = run_plugin_with_registries(config_dir.path(), "  ", &["list"]);
++    assert!(default.status.success());
++    assert!(
++        !combined(&default).contains(&zeroclaw_plugins::registry::registry_origin_label(&first))
++    );
+     assert_eq!(server.received_requests().await.unwrap().len(), 2);
+     server.verify().await;
+ }
