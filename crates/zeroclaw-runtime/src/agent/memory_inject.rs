@@ -2449,7 +2449,18 @@ mod tests {
             let before = embedder.0.load(Ordering::SeqCst);
             let hits = scoped.recall_for_prompt(query, 1, session).await.unwrap();
             assert_eq!(embedder.0.load(Ordering::SeqCst), before + 1);
-            assert_eq!(hits.len(), 1);
+            println!("merged SQLite query={query:?} exact-limit hits={hits:?}");
+            if hits.len() != 1 {
+                let wider = scoped.recall_for_prompt(query, 10, session).await.unwrap();
+                println!("DIAGNOSTIC wider limit=10 hits={wider:?}");
+                let recent = scoped.recall_for_prompt("*", 10, session).await.unwrap();
+                println!("DIAGNOSTIC recent eligible hits={recent:?}");
+            }
+            assert_eq!(
+                hits.len(),
+                1,
+                "query={query:?}: eligible fact must survive at limit=1"
+            );
             assert_eq!(hits[0].key, "plant_fact");
             assert_eq!(hits[0].content, FACT);
             assert_eq!(hits[0].agent_id.as_deref(), Some(own.as_str()));

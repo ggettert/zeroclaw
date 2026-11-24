@@ -23,7 +23,7 @@ jobs:
       - name: Checkout validation overlay
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          fetch-depth: 3
+          fetch-depth: 8
           persist-credentials: false
       - name: Attest frozen product and test-only overlay
         shell: bash
@@ -75,7 +75,7 @@ jobs:
           done
       - name: SQLite preserved upstream failure contracts
         id: sqlite
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         shell: bash
         run: |
           set -euo pipefail
@@ -85,7 +85,7 @@ jobs:
           done
       - name: SQLite forced failure crowded prompt scope and production rendering
         id: intersection
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         shell: bash
         run: |
           set -euo pipefail
