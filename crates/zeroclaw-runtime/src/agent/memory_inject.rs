@@ -2344,7 +2344,8 @@ mod tests {
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
-        use zeroclaw_memory::{AgentScopedMemory, PrincipalScope, SqliteMemory};
+        use zeroclaw_api::memory_traits::PrincipalScope;
+        use zeroclaw_memory::{AgentScopedMemory, SqliteMemory};
         struct ForcedFailure(AtomicUsize);
         #[async_trait::async_trait]
         impl zeroclaw_memory::embeddings::EmbeddingProvider for ForcedFailure {
