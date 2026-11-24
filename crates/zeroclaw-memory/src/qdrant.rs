@@ -2179,4 +2179,88 @@ mod tests {
         assert!(!json.contains("session_id"));
         assert!(!json.contains("agent_id"));
     }
+    // Validation-only intersection: real HTTP client, scripted Qdrant transport.
+    #[tokio::test]
+    async fn merged_validation_prompt_pages_preserve_rfc3339_timestamps() {
+        let timestamps = [
+            "2026-09-26T12:00:00+08:00",
+            "2026-09-26T04:00:00.000Z",
+            "2026-09-26T05:00:00.500000+00:00",
+            "2026-09-26T06:00:00.001Z",
+        ];
+        for mode in 0..3 {
+            let search = mode == 0;
+            let first: Vec<_> = (0..PROMPT_PAGE_POINTS)
+                .map(|i| prompt_point(i, "user_msg_raw"))
+                .collect();
+            let second: Vec<_> = timestamps
+                .iter()
+                .enumerate()
+                .map(|(i, ts)| {
+                    let mut p = prompt_point(100 + i, &format!("fact-{i}"));
+                    p["payload"]["timestamp"] = serde_json::json!(ts);
+                    p
+                })
+                .collect();
+            let result = |points: Vec<serde_json::Value>, next: serde_json::Value| {
+                if search {
+                    serde_json::json!({"result": points})
+                } else {
+                    serde_json::json!({"result": {"points": points, "next_page_offset": next}})
+                }
+            };
+            let (mem, embedder, server) = prompt_fixture(
+                vec![
+                    (
+                        64,
+                        if search {
+                            serde_json::json!(0)
+                        } else {
+                            serde_json::Value::Null
+                        },
+                        result(first, serde_json::json!("page-two")),
+                        false,
+                    ),
+                    (
+                        64,
+                        if search {
+                            serde_json::json!(64)
+                        } else {
+                            serde_json::json!("page-two")
+                        },
+                        result(second, serde_json::Value::Null),
+                        false,
+                    ),
+                ],
+                search,
+                mode == 2,
+            );
+            let query = if mode == 1 { "" } else { "query" };
+            let hits = mem
+                .recall_for_prompt_for_agents(&["alpha"], query, 4, Some("session"))
+                .await
+                .unwrap();
+            assert_eq!(hits.len(), 4, "mode {mode}");
+            for (i, hit) in hits.iter().enumerate() {
+                assert_eq!(hit.key, format!("fact-{i}"));
+                assert_eq!(hit.timestamp, timestamps[i]);
+                assert_eq!(hit.session_id.as_deref(), Some("session"));
+                assert_eq!(hit.agent_id.as_deref(), Some("alpha"));
+                assert!(chrono::DateTime::parse_from_rfc3339(&hit.timestamp).is_ok());
+            }
+            let instant =
+                |i: usize| chrono::DateTime::parse_from_rfc3339(&hits[i].timestamp).unwrap();
+            assert_eq!(instant(0), instant(1));
+            assert_eq!((instant(2) - instant(0)).num_milliseconds(), 3_600_500);
+            assert_eq!((instant(3) - instant(0)).num_milliseconds(), 7_200_001);
+            assert_eq!(
+                embedder.calls.load(std::sync::atomic::Ordering::SeqCst),
+                if mode == 1 { 0 } else { 1 }
+            );
+            server.join().unwrap();
+            println!(
+                "merged Qdrant mode={mode}: 2 bounded pages, 64 autosaves skipped, 4 timestamp assertions; MOCK server"
+            );
+        }
+    }
 }
