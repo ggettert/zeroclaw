@@ -111,6 +111,12 @@ jobs:
           git diff --name-only | tee "$RUNNER_TEMP/evidence/baseline-diff.txt"
           test "$(git diff --name-only | wc -l)" -eq 2
           git diff --exit-code -- tests/live/mod.rs tests/live/memory_prompt_backends.rs
+          # The existing migration checks constraint names database-wide, not per schema.
+          # A fresh disposable database isolates red from green without changing product/test code.
+          pg_container=$(docker ps --filter ancestor=postgres:17.6 --format '{{.ID}}')
+          test -n "$pg_container"
+          docker exec "$pg_container" createdb -U postgres prompt_red
+          export ZEROCLAW_TEST_POSTGRES_URL=postgresql://postgres@localhost:5432/prompt_red
           for backend in postgres qdrant; do
             set +e
             cargo test --locked -p zeroclaw --features memory-postgres --test live "memory_prompt_backends::${backend}_autosaves_do_not_crowd_out_prompt_facts" -- --ignored --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/evidence/live-red-$backend.log"
