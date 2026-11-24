@@ -1,0 +1,145 @@
+name: Frozen 12508 backend revision two red-green
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fork-12508-backend-v2-20261124
+  cancel-in-progress: false
+jobs:
+  red-green:
+    if: github.repository == 'ggettert/zeroclaw' && github.event.repository.private == false && github.ref == 'refs/heads/validation/12508-backend-v2-20261124'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: prompt_test
+        ports:
+          - 5432:5432
+        options: --health-cmd "pg_isready -U postgres -d prompt_test" --health-interval 5s --health-timeout 5s --health-retries 12
+      qdrant:
+        image: qdrant/qdrant:v1.15.4
+        ports:
+          - 6333:6333
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      ZEROCLAW_TEST_POSTGRES_URL: postgresql://postgres@localhost:5432/prompt_test
+      ZEROCLAW_TEST_QDRANT_URL: http://localhost:6333
+      SOURCE_SHA: 7932a967bde37327db5ddd6c046bbac747417864
+      BASE_SHA: 2de80890215d664b49af16df98e151566f740eaf
+    steps:
+      - name: Checkout exact frozen source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 7932a967bde37327db5ddd6c046bbac747417864
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify source and service identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test -z "$(git status --porcelain)"
+          printf 'Source %s; baseline %s; CI %s\n' "$SOURCE_SHA" "$BASE_SHA" "$GITHUB_SHA"
+          docker ps --format '{{.Image}} {{.Status}}'
+          docker inspect --format '{{.Config.Image}} {{.Image}}' $(docker ps -q)
+          for i in {1..30}; do curl --fail --silent http://localhost:6333/readyz && break; sleep 2; done
+          curl --fail --silent http://localhost:6333/
+          mkdir -p "$RUNNER_TEMP/evidence"
+      - name: Rust 1.98
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.98.0
+          components: rustfmt
+      - name: Build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libudev-dev libasound2-dev pkg-config
+          rustc --version
+          cargo --version
+          df -h .
+      - name: Formatting frozen source
+        id: fmt
+        run: cargo fmt --all -- --check
+      - name: Focused prompt and Qdrant paging tests
+        id: unit
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p zeroclaw-memory --features memory-postgres --lib prompt_ -- --nocapture 2>&1 | tee "$RUNNER_TEMP/evidence/prompt-unit.log"
+          python3 - <<'PY'
+          import os,pathlib,re
+          s=(pathlib.Path(os.environ['RUNNER_TEMP'])/'evidence/prompt-unit.log').read_text()
+          for name in ['prompt_pages_advance_over_malformed_points_embed_once_and_keep_archive','prompt_work_budget_returns_partial_without_extra_requests','prompt_page_failure_keeps_previously_found_fact','prompt_scroll_and_fallback_follow_raw_cursor_and_stop_cycles','prompt_response_byte_budget_rejects_oversized_page','prompt_pages_stop_at_requested_count_and_empty_exhaustion']:
+              assert re.search(r'test .*::'+name+r' ... ok',s),name
+          assert re.search(r'test result: ok. [1-9][0-9]* passed;',s)
+          PY
+      - name: PostgreSQL real-server key predicate
+        id: predicate
+        if: ${{ !cancelled() && steps.unit.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p zeroclaw-memory --features memory-postgres --lib postgres_prompt_key_filter_matches_rust_predicate -- --ignored --nocapture 2>&1 | tee "$RUNNER_TEMP/evidence/postgres-predicate.log"
+          grep -F 'test result: ok. 1 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/evidence/postgres-predicate.log"
+      - name: Fixed real-backend fact and archive preservation
+        id: green
+        if: ${{ !cancelled() && steps.unit.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p zeroclaw --features memory-postgres --test live memory_prompt_backends -- --ignored --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/evidence/live-green.log"
+          grep -F 'test result: ok. 2 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/evidence/live-green.log"
+          git diff --exit-code HEAD
+      - name: Baseline fails at exact missing-fact assertion for each backend
+        id: red
+        if: ${{ !cancelled() && steps.green.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in crates/zeroclaw-memory/src/postgres.rs crates/zeroclaw-memory/src/qdrant.rs; do git show "$BASE_SHA:$f" > "$f"; done
+          trap 'git restore --source="$SOURCE_SHA" --worktree -- crates/zeroclaw-memory/src/postgres.rs crates/zeroclaw-memory/src/qdrant.rs' EXIT
+          git diff --name-only | tee "$RUNNER_TEMP/evidence/baseline-diff.txt"
+          test "$(git diff --name-only | wc -l)" -eq 2
+          git diff --exit-code -- tests/live/mod.rs tests/live/memory_prompt_backends.rs
+          for backend in postgres qdrant; do
+            set +e
+            cargo test --locked -p zeroclaw --features memory-postgres --test live "memory_prompt_backends::${backend}_autosaves_do_not_crowd_out_prompt_facts" -- --ignored --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/evidence/live-red-$backend.log"
+            status=${PIPESTATUS[0]}
+            set -e
+            test "$status" -eq 101
+            BACKEND="$backend" python3 - <<'PY'
+          import os,pathlib,re
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'evidence'
+          s=(root/('live-red-'+os.environ['BACKEND']+'.log')).read_text()
+          lines=pathlib.Path('tests/live/memory_prompt_backends.rs').read_text().splitlines()
+          line=next(i for i,l in enumerate(lines,1) if 'assert!(prompt.contains(&format!("plant_fact: {FACT}"))' in l)
+          assert 'running 1 test' in s
+          assert 'test result: FAILED. 0 passed; 1 failed; 0 ignored;' in s
+          assert re.search(r'panicked at tests/live/memory_prompt_backends.rs:'+str(line)+r':[0-9]+',s),s[-5000:]
+          assert 'could not compile' not in s
+          print('CONFIRMED intended missing-fact baseline assertion:',os.environ['BACKEND'],line)
+          PY
+          done
+      - name: Final source integrity and required execution
+        if: always()
+        env:
+          FMT: ${{ steps.fmt.outcome }}
+          UNIT: ${{ steps.unit.outcome }}
+          PREDICATE: ${{ steps.predicate.outcome }}
+          GREEN: ${{ steps.green.outcome }}
+          RED: ${{ steps.red.outcome }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --exit-code HEAD
+          printf 'fmt=%s unit=%s predicate=%s green=%s red=%s\n' "$FMT" "$UNIT" "$PREDICATE" "$GREEN" "$RED"
+          test "$FMT/$UNIT/$PREDICATE/$GREEN/$RED" = success/success/success/success/success
