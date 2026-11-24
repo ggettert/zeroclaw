@@ -2337,4 +2337,191 @@ mod tests {
             .expect("the weaker relevant entry survives the configured floor");
         assert!(best < supporting, "BM25 relevance order survives blending");
     }
+    // Validation-only: real bundled SQLite, forced provider error, production renderer.
+    #[tokio::test]
+    async fn merged_validation_sqlite_failed_embedding_crowded_scoped_prompt() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use zeroclaw_memory::{AgentScopedMemory, PrincipalScope, SqliteMemory};
+        struct ForcedFailure(AtomicUsize);
+        #[async_trait::async_trait]
+        impl zeroclaw_memory::embeddings::EmbeddingProvider for ForcedFailure {
+            fn name(&self) -> &str {
+                "merged-validation-forced-failure"
+            }
+            fn dimensions(&self) -> usize {
+                2
+            }
+            async fn embed(&self, _: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                anyhow::bail!("validation forced embedding outage")
+            }
+        }
+        let tmp = tempfile::TempDir::new().unwrap();
+        let embedder = Arc::new(ForcedFailure(AtomicUsize::new(0)));
+        let backend = SqliteMemory::with_embedder(
+            "test",
+            tmp.path(),
+            embedder.clone(),
+            0.7,
+            0.3,
+            1000,
+            None,
+            zeroclaw_config::schema::SearchMode::Hybrid,
+        )
+        .unwrap();
+        let own = backend.ensure_agent_uuid("own").await.unwrap();
+        let other = backend.ensure_agent_uuid("other").await.unwrap();
+        let backend = Arc::new(backend);
+        let scoped = AgentScopedMemory::new(backend.clone(), own.clone(), Vec::<String>::new());
+        let session = Some("merged-session");
+        const FACT: &str = "orchid prefers shade";
+        scoped
+            .store("plant_fact", FACT, MemoryCategory::Core, session)
+            .await
+            .unwrap();
+        for i in 0..64 {
+            scoped
+                .store(
+                    &format!("user_msg_{i}"),
+                    "orchid orchid orchid RAW_SECRET",
+                    MemoryCategory::Conversation,
+                    session,
+                )
+                .await
+                .unwrap();
+        }
+        scoped
+            .store(
+                "other_session_fact",
+                "orchid WRONG_SESSION",
+                MemoryCategory::Core,
+                Some("other-session"),
+            )
+            .await
+            .unwrap();
+        backend
+            .store_with_agent(
+                "other_agent_fact",
+                "orchid WRONG_AGENT",
+                MemoryCategory::Core,
+                session,
+                None,
+                None,
+                Some(&other),
+            )
+            .await
+            .unwrap();
+        let alice = PrincipalScope::new("user:alice");
+        let bob = PrincipalScope::new("user:bob");
+        for (principal, content) in [
+            (&alice, "orchid PRIVATE_ALICE"),
+            (&bob, "orchid PRIVATE_BOB"),
+        ] {
+            backend
+                .store_for_principal(
+                    principal,
+                    "private_fact",
+                    content,
+                    MemoryCategory::Core,
+                    session,
+                )
+                .await
+                .unwrap();
+            for i in 0..64 {
+                backend
+                    .store_for_principal(
+                        principal,
+                        &format!("user_msg_{i}"),
+                        "orchid PRIVATE_RAW",
+                        MemoryCategory::Conversation,
+                        session,
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        // Read counter deltas prove query-time failure, not merely failed writes.
+        for query in ["orchid", "rch"] {
+            let before = embedder.0.load(Ordering::SeqCst);
+            let hits = scoped.recall_for_prompt(query, 1, session).await.unwrap();
+            assert_eq!(embedder.0.load(Ordering::SeqCst), before + 1);
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].key, "plant_fact");
+            assert_eq!(hits[0].content, FACT);
+            assert_eq!(hits[0].agent_id.as_deref(), Some(own.as_str()));
+            assert_eq!(hits[0].session_id.as_deref(), session);
+            assert!(hits[0].principal_id.is_none());
+        }
+        let before = embedder.0.load(Ordering::SeqCst);
+        let cfg = MemoryInjectConfig {
+            limit: 1,
+            ..MemoryInjectConfig::default()
+        };
+        let prompt = render_memory_context(
+            &scoped,
+            &crate::observability::noop::NoopObserver,
+            "orchid",
+            &[session],
+            &cfg,
+            false,
+            TurnMeta {
+                parent_agent_alias: None,
+                agent_alias: Some("own"),
+                turn_id: "merged-validation",
+                channel_name: "test",
+            },
+        )
+        .await;
+        assert_eq!(embedder.0.load(Ordering::SeqCst), before + 1);
+        assert!(
+            prompt.contains("plant_fact: orchid prefers shade"),
+            "{prompt}"
+        );
+        for forbidden in [
+            "user_msg",
+            "RAW_SECRET",
+            "other_session_fact",
+            "other_agent_fact",
+            "WRONG_SESSION",
+            "WRONG_AGENT",
+            "PRIVATE_",
+        ] {
+            assert!(!prompt.contains(forbidden), "{prompt}");
+        }
+        assert!(
+            scoped
+                .recall_for_prompt_for_agents(&[&other], "orchid", 1, session)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        // Private recall is intentionally keyword-only: no embedder call is claimed here.
+        let before = embedder.0.load(Ordering::SeqCst);
+        let private = backend
+            .recall_for_prompt_for_principal(&alice, "orchid", 1, session)
+            .await
+            .unwrap();
+        assert_eq!(embedder.0.load(Ordering::SeqCst), before);
+        assert_eq!(private.len(), 1);
+        assert_eq!(private[0].content, "orchid PRIVATE_ALICE");
+        assert_eq!(private[0].principal_id.as_deref(), Some("user:alice"));
+        let archive = scoped
+            .recall("orchid", 100, session, None, None)
+            .await
+            .unwrap();
+        assert_eq!(archive.len(), 65);
+        assert_eq!(
+            archive
+                .iter()
+                .filter(|e| zeroclaw_memory::is_user_autosave_key(&e.key))
+                .count(),
+            64
+        );
+        println!(
+            "merged SQLite: forced query embedding failure; 64 shared + 128 private autosaves; FTS/LIKE fact returned; production renderer fact delivered; agent/session/principal exclusions verified; real bundled SQLite, mock embedder; renderer relevance floor 0"
+        );
+    }
 }
